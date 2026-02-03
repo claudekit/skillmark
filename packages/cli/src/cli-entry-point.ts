@@ -10,8 +10,9 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { runBenchmark } from './commands/run-benchmark-command.js';
-import { publishResults } from './commands/publish-results-command.js';
+import { publishResults, publishResultsWithAutoKey } from './commands/publish-results-command.js';
 import { viewLeaderboard } from './commands/view-leaderboard-command.js';
+import { readApiKeyConfig, getConfigSourceDescription } from './config/api-key-config-reader.js';
 
 const VERSION = '0.1.0';
 
@@ -31,6 +32,9 @@ program
   .option('-m, --model <model>', 'Model to use (haiku|sonnet|opus)', 'sonnet')
   .option('-r, --runs <n>', 'Number of iterations', '3')
   .option('-o, --output <dir>', 'Output directory', './skillmark-results')
+  .option('-p, --publish', 'Auto-publish results after benchmark completes')
+  .option('-k, --api-key <key>', 'API key for publishing (or use config/env)')
+  .option('-e, --endpoint <url>', 'API endpoint URL for publishing')
   .action(async (skillSource: string, options) => {
     try {
       // Validate model
@@ -48,12 +52,45 @@ program
         process.exit(1);
       }
 
-      await runBenchmark(skillSource, {
+      // Run benchmark
+      const result = await runBenchmark(skillSource, {
         tests: options.tests,
         model: model as 'haiku' | 'sonnet' | 'opus',
         runs,
         output: options.output,
       });
+
+      // Auto-publish if requested
+      if (options.publish) {
+        console.log(chalk.blue('\n📤 Publishing results...\n'));
+
+        // Get API key from option or config
+        let apiKey = options.apiKey;
+        let keySource = 'command line';
+
+        if (!apiKey) {
+          const config = await readApiKeyConfig();
+          if (config) {
+            apiKey = config.apiKey;
+            keySource = getConfigSourceDescription(config.source);
+          }
+        }
+
+        if (!apiKey) {
+          console.error(chalk.red('No API key found.'));
+          console.error(chalk.gray('Provide via --api-key, SKILLMARK_API_KEY env, or ~/.skillmarkrc'));
+          console.error(chalk.gray('\nGet your API key at: https://skillmark.workers.dev/login'));
+          process.exit(1);
+        }
+
+        console.log(chalk.gray(`Using API key from ${keySource}`));
+
+        await publishResultsWithAutoKey(result, {
+          apiKey,
+          endpoint: options.endpoint,
+          testsPath: options.tests,
+        });
+      }
     } catch (error) {
       console.error(chalk.red(`\nError: ${error instanceof Error ? error.message : error}`));
       process.exit(1);
@@ -65,12 +102,30 @@ program
   .command('publish')
   .description('Upload benchmark results to leaderboard')
   .argument('<result-file>', 'Path to result.json file')
-  .requiredOption('-k, --api-key <key>', 'Your skillmark API key')
+  .option('-k, --api-key <key>', 'Your skillmark API key (or use config/env)')
   .option('-e, --endpoint <url>', 'API endpoint URL')
   .action(async (resultFile: string, options) => {
     try {
+      // Get API key from option or config
+      let apiKey = options.apiKey;
+
+      if (!apiKey) {
+        const config = await readApiKeyConfig();
+        if (config) {
+          apiKey = config.apiKey;
+          console.log(chalk.gray(`Using API key from ${getConfigSourceDescription(config.source)}`));
+        }
+      }
+
+      if (!apiKey) {
+        console.error(chalk.red('No API key found.'));
+        console.error(chalk.gray('Provide via --api-key, SKILLMARK_API_KEY env, or ~/.skillmarkrc'));
+        console.error(chalk.gray('\nGet your API key at: https://skillmark.workers.dev/login'));
+        process.exit(1);
+      }
+
       await publishResults(resultFile, {
-        apiKey: options.apiKey,
+        apiKey,
         endpoint: options.endpoint,
       });
     } catch (error) {
@@ -98,17 +153,29 @@ program
     }
   });
 
-// Parse and execute
-program.parse();
+// ASCII logo
+const LOGO = `
+${chalk.gray('███████╗██╗  ██╗██╗██╗     ██╗     ███╗   ███╗ █████╗ ██████╗ ██╗  ██╗')}
+${chalk.gray('██╔════╝██║ ██╔╝██║██║     ██║     ████╗ ████║██╔══██╗██╔══██╗██║ ██╔╝')}
+${chalk.white('███████╗█████╔╝ ██║██║     ██║     ██╔████╔██║███████║██████╔╝█████╔╝')}
+${chalk.gray('╚════██║██╔═██╗ ██║██║     ██║     ██║╚██╔╝██║██╔══██║██╔══██╗██╔═██╗')}
+${chalk.gray('███████║██║  ██╗██║███████╗███████╗██║ ╚═╝ ██║██║  ██║██║  ██║██║  ██╗')}
+${chalk.gray('╚══════╝╚═╝  ╚═╝╚═╝╚══════╝╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝')}
+`;
 
-// Show help if no command provided
+// Show logo and help if no command
 if (!process.argv.slice(2).length) {
-  console.log(chalk.bold('\n  Skillmark') + chalk.gray(' - Agent skill benchmarking\n'));
+  console.log(LOGO);
+  console.log(chalk.gray('  Agent Skill Benchmarking Platform\n'));
   console.log('  ' + chalk.gray('Examples:'));
   console.log('    ' + chalk.cyan('skillmark run') + ' ~/.claude/skills/my-skill');
-  console.log('    ' + chalk.cyan('skillmark run') + ' https://github.com/user/skill --model opus');
-  console.log('    ' + chalk.cyan('skillmark publish') + ' ./skillmark-results/result.json --api-key <key>');
+  console.log('    ' + chalk.cyan('skillmark run') + ' ./skill --model opus --publish');
+  console.log('    ' + chalk.cyan('skillmark publish') + ' ./result.json');
   console.log('    ' + chalk.cyan('skillmark leaderboard'));
   console.log('');
   program.outputHelp();
+  process.exit(0);
 }
+
+// Parse and execute
+program.parse();
