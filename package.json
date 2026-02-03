@@ -1,0 +1,25 @@
+{
+  "name": "skillmark",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent skill benchmarking platform with CLI and public leaderboards",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/claudekit/skillmark"
+  },
+  "license": "MIT",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r dev",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "clean": "pnpm -r clean"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@skillmark/webapp",
+  "version": "0.1.0",
+  "description": "Skillmark leaderboard webapp (Cloudflare Workers)",
+  "type": "module",
+  "main": "./src/worker-entry-point.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "lint": "tsc --noEmit",
+    "db:create": "wrangler d1 create skillmark-db",
+    "db:migrate": "wrangler d1 execute skillmark-db --file=./src/db/schema.sql"
+  },
+  "dependencies": {
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240117.0",
+    "typescript": "^5.3.3",
+    "wrangler": "^3.22.0"
+  }
+}

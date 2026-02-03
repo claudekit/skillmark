@@ -1,0 +1,11 @@
+name = "skillmark"
+main = "src/worker-entry-point.ts"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "skillmark-db"
+database_id = "e1b45b94-f799-4e75-83f2-bebd777b040d"
+
+[vars]
+ENVIRONMENT = "development"
