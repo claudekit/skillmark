@@ -1,6 +1,10 @@
 # Skillmark
 
+![Skillmark - The Agent Skill Benchmarking Platform](https://cdn.claudekit.cc/skillmark/og-image.png)
+
 Agent skill benchmarking platform with CLI and public leaderboards.
+
+**Website:** [skillmark.sh](https://skillmark.sh)
 
 ## Overview
 
