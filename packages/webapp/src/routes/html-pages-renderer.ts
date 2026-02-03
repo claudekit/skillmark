@@ -21,6 +21,8 @@ interface LeaderboardRow {
   avgCost: number;
   lastTested: number;
   totalRuns: number;
+  submitterGithub?: string;
+  skillshLink?: string;
 }
 
 /**
@@ -28,18 +30,21 @@ interface LeaderboardRow {
  */
 pagesRouter.get('/', async (c) => {
   try {
+    // Get leaderboard with latest submitter info
     const results = await c.env.DB.prepare(`
       SELECT
-        skill_id as skillId,
-        skill_name as skillName,
-        source,
-        best_accuracy as bestAccuracy,
-        best_model as bestModel,
-        avg_tokens as avgTokens,
-        avg_cost as avgCost,
-        last_tested as lastTested,
-        total_runs as totalRuns
-      FROM leaderboard
+        l.skill_id as skillId,
+        l.skill_name as skillName,
+        l.source,
+        l.best_accuracy as bestAccuracy,
+        l.best_model as bestModel,
+        l.avg_tokens as avgTokens,
+        l.avg_cost as avgCost,
+        l.last_tested as lastTested,
+        l.total_runs as totalRuns,
+        (SELECT submitter_github FROM results WHERE skill_id = l.skill_id ORDER BY created_at DESC LIMIT 1) as submitterGithub,
+        (SELECT skillsh_link FROM results WHERE skill_id = l.skill_id AND skillsh_link IS NOT NULL ORDER BY created_at DESC LIMIT 1) as skillshLink
+      FROM leaderboard l
       LIMIT 50
     `).all();
 
@@ -67,6 +72,135 @@ pagesRouter.get('/how-it-works', (c) => {
 });
 
 /**
+ * GET /skill/:name - Skill detail page
+ */
+pagesRouter.get('/skill/:name', async (c) => {
+  try {
+    const skillName = decodeURIComponent(c.req.param('name'));
+
+    // Get skill details with latest submitter
+    const skill = await c.env.DB.prepare(`
+      SELECT
+        l.skill_id as skillId,
+        l.skill_name as skillName,
+        l.source,
+        l.best_accuracy as bestAccuracy,
+        l.best_model as bestModel,
+        l.avg_tokens as avgTokens,
+        l.avg_cost as avgCost,
+        l.last_tested as lastTested,
+        l.total_runs as totalRuns
+      FROM leaderboard l
+      WHERE l.skill_name = ?
+    `).bind(skillName).first();
+
+    if (!skill) {
+      return c.html(renderErrorPage('Skill not found'), 404);
+    }
+
+    // Get recent results with submitter info
+    const results = await c.env.DB.prepare(`
+      SELECT
+        r.accuracy,
+        r.model,
+        r.tokens_total as tokensTotal,
+        r.cost_usd as costUsd,
+        r.created_at as createdAt,
+        r.submitter_github as submitterGithub,
+        r.skillsh_link as skillshLink,
+        r.test_files as testFiles
+      FROM results r
+      WHERE r.skill_id = ?
+      ORDER BY r.created_at DESC
+      LIMIT 20
+    `).bind(skill.skillId).all();
+
+    const formattedResults = results.results?.map((r: Record<string, unknown>) => ({
+      accuracy: r.accuracy,
+      model: r.model,
+      tokensTotal: r.tokensTotal,
+      costUsd: r.costUsd,
+      createdAt: r.createdAt ? new Date((r.createdAt as number) * 1000).toISOString() : null,
+      submitterGithub: r.submitterGithub,
+      skillshLink: r.skillshLink,
+      testFiles: r.testFiles ? JSON.parse(r.testFiles as string) : null,
+    })) || [];
+
+    return c.html(renderSkillDetailPage(skill as unknown as LeaderboardRow, formattedResults));
+  } catch (error) {
+    console.error('Error rendering skill page:', error);
+    return c.html(renderErrorPage('Failed to load skill details'));
+  }
+});
+
+/**
+ * GET /login - Login page with GitHub OAuth
+ */
+pagesRouter.get('/login', (c) => {
+  const error = c.req.query('error');
+  return c.html(renderLoginPage(error));
+});
+
+/**
+ * GET /dashboard - User dashboard with API key management
+ */
+pagesRouter.get('/dashboard', async (c) => {
+  // Check if user is logged in via cookie
+  const cookieHeader = c.req.header('Cookie') || '';
+  const sessionId = parseCookie(cookieHeader, 'skillmark_session');
+
+  if (!sessionId) {
+    return c.redirect('/login');
+  }
+
+  // Get user from session
+  const session = await c.env.DB.prepare(`
+    SELECT u.id, u.github_username, u.github_avatar
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.id = ? AND s.expires_at > unixepoch()
+  `).bind(sessionId).first();
+
+  if (!session) {
+    return c.redirect('/login');
+  }
+
+  // Get user's API keys
+  const keys = await c.env.DB.prepare(`
+    SELECT id, created_at, last_used_at
+    FROM api_keys
+    WHERE github_username = ?
+    ORDER BY created_at DESC
+  `).bind(session.github_username).all();
+
+  const formattedKeys = keys.results?.map((key: Record<string, unknown>) => ({
+    id: key.id,
+    createdAt: key.created_at ? new Date((key.created_at as number) * 1000).toISOString() : null,
+    lastUsedAt: key.last_used_at ? new Date((key.last_used_at as number) * 1000).toISOString() : null,
+  })) || [];
+
+  return c.html(renderDashboardPage({
+    username: session.github_username as string,
+    avatar: session.github_avatar as string | null,
+    keys: formattedKeys,
+  }));
+});
+
+/**
+ * Helper: Parse specific cookie from header
+ */
+function parseCookie(cookieHeader: string, name: string): string | null {
+  const cookies = cookieHeader.split(';');
+  for (const cookie of cookies) {
+    const [cookieName, ...rest] = cookie.trim().split('=');
+    if (cookieName === name) {
+      return rest.join('=');
+    }
+  }
+  return null;
+}
+
+/**
  * Render the leaderboard HTML page - Vercel/skills.sh style
  */
 function renderLeaderboardPage(entries: LeaderboardRow[]): string {
@@ -77,13 +211,26 @@ function renderLeaderboardPage(entries: LeaderboardRow[]): string {
     const accuracy = entry.bestAccuracy.toFixed(1);
     const source = entry.source || '';
     const repoPath = source.replace('https://github.com/', '').replace(/\.git$/, '');
+    const submitter = entry.submitterGithub;
+    const skillshLink = entry.skillshLink;
 
     return `
-      <tr>
+      <tr onclick="window.location='/skill/${encodeURIComponent(entry.skillName)}'" style="cursor: pointer;">
         <td class="rank">${rank}</td>
         <td class="skill">
-          <span class="skill-name">${escapeHtml(entry.skillName)}</span>
-          ${repoPath ? `<span class="skill-repo">${escapeHtml(repoPath)}</span>` : ''}
+          <div class="skill-info">
+            <span class="skill-name">${escapeHtml(entry.skillName)}</span>
+            ${repoPath ? `<span class="skill-repo">${escapeHtml(repoPath)}</span>` : ''}
+            ${skillshLink ? `<a href="${escapeHtml(skillshLink)}" class="skillsh-link" onclick="event.stopPropagation()">skill.sh</a>` : ''}
+          </div>
+        </td>
+        <td class="submitter">
+          ${submitter ? `
+            <a href="https://github.com/${escapeHtml(submitter)}" class="submitter-link" onclick="event.stopPropagation()">
+              <img src="https://github.com/${escapeHtml(submitter)}.png?size=24" alt="" class="submitter-avatar">
+              <span>@${escapeHtml(submitter)}</span>
+            </a>
+          ` : '<span class="no-submitter">-</span>'}
         </td>
         <td class="accuracy">${accuracy}%</td>
       </tr>
@@ -407,6 +554,12 @@ function renderLeaderboardPage(entries: LeaderboardRow[]): string {
       gap: 0.125rem;
     }
 
+    .skill-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.125rem;
+    }
+
     .skill-name {
       font-weight: 500;
     }
@@ -414,6 +567,43 @@ function renderLeaderboardPage(entries: LeaderboardRow[]): string {
     .skill-repo {
       font-family: 'Geist Mono', monospace;
       font-size: 0.8125rem;
+      color: var(--text-secondary);
+    }
+
+    .skillsh-link {
+      font-size: 0.75rem;
+      color: #58a6ff;
+      text-decoration: none;
+    }
+
+    .skillsh-link:hover {
+      text-decoration: underline;
+    }
+
+    .submitter {
+      width: 150px;
+    }
+
+    .submitter-link {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.8125rem;
+    }
+
+    .submitter-link:hover {
+      color: var(--text);
+    }
+
+    .submitter-avatar {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+    }
+
+    .no-submitter {
       color: var(--text-secondary);
     }
 
@@ -507,7 +697,8 @@ function renderLeaderboardPage(entries: LeaderboardRow[]): string {
     <div class="nav-right">
       <a href="/docs">Docs</a>
       <a href="/how-it-works">How It Works</a>
-      <a href="https://github.com/claudekit/skillmark">GitHub</a>
+      <a href="https://github.com/claudekit/skillmark" title="GitHub"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg></a>
+      <a href="/login">Login</a>
     </div>
   </nav>
 
@@ -567,6 +758,7 @@ function renderLeaderboardPage(entries: LeaderboardRow[]): string {
       <div class="tabs">
         <button class="tab active">All Time <span class="tab-count">(${entries.length.toLocaleString()})</span></button>
         <button class="tab">By Accuracy</button>
+        <button class="tab">By Tokens</button>
         <button class="tab">By Cost</button>
       </div>
 
@@ -576,6 +768,7 @@ function renderLeaderboardPage(entries: LeaderboardRow[]): string {
           <tr>
             <th>#</th>
             <th>Skill</th>
+            <th>Submitter</th>
             <th>Accuracy</th>
           </tr>
         </thead>
@@ -598,7 +791,8 @@ function renderLeaderboardPage(entries: LeaderboardRow[]): string {
       <p>
         Built with <a href="https://github.com/claudekit/skillmark">Skillmark</a> ·
         <a href="https://www.npmjs.com/package/skillmark">npm</a> ·
-        <a href="https://github.com/claudekit/skillmark">GitHub</a>
+        <a href="https://github.com/claudekit/skillmark">GitHub</a> ·
+        by <a href="https://claudekit.cc">ClaudeKit.cc</a>
       </p>
     </footer>
   </div>
@@ -689,11 +883,22 @@ npx skillmark</code></pre>
     </section>
 
     <section class="doc-section">
+      <h2>Requirements</h2>
+      <ul>
+        <li><strong>Claude Code CLI</strong> - Skillmark runs benchmarks using Claude Code locally</li>
+        <li><strong>Claude Max subscription</strong> - Required for Claude Code API access</li>
+      </ul>
+      <p>All benchmarks run 100% locally on your machine.</p>
+    </section>
+
+    <section class="doc-section">
       <h2>Quick Start</h2>
       <p>Run your first benchmark in 3 steps:</p>
 
-      <h3>1. Create a test file</h3>
-      <p>Create <code>tests/my-test.md</code> with YAML frontmatter:</p>
+      <h3>1. Test Files (Auto-generated)</h3>
+      <p>Skillmark auto-generates test files based on your skill's SKILL.md. Just run:</p>
+      <pre><code>skillmark run ./my-skill</code></pre>
+      <p>Or create tests manually with YAML frontmatter:</p>
       <pre><code>---
 name: my-first-test
 type: knowledge
@@ -737,7 +942,28 @@ Your question or task here.
         <tr><td><code>--model &lt;model&gt;</code></td><td>haiku | sonnet | opus (default: sonnet)</td></tr>
         <tr><td><code>--runs &lt;n&gt;</code></td><td>Number of iterations (default: 3)</td></tr>
         <tr><td><code>--output &lt;dir&gt;</code></td><td>Output directory (default: ./skillmark-results)</td></tr>
+        <tr><td><code>--publish</code></td><td>Auto-publish results to leaderboard</td></tr>
       </table>
+    </section>
+
+    <section class="doc-section">
+      <h2>Publishing Results</h2>
+      <h3>1. Get API Key</h3>
+      <p><a href="/login">Login with GitHub</a> to get your API key from the dashboard.</p>
+
+      <h3>2. Save API Key</h3>
+      <pre><code># Option 1: Environment variable
+export SKILLMARK_API_KEY=sk_your_key
+
+# Option 2: Config file
+echo "api_key=sk_your_key" > ~/.skillmarkrc</code></pre>
+
+      <h3>3. Publish</h3>
+      <pre><code># Auto-publish after benchmark
+skillmark run ./my-skill --publish
+
+# Or publish existing results
+skillmark publish ./skillmark-results/result.json</code></pre>
     </section>
   `);
 }
@@ -752,10 +978,11 @@ function renderHowItWorksPage(): string {
       <p>Skillmark benchmarks AI agent skills by running standardized tests and measuring key metrics:</p>
       <ul>
         <li><strong>Accuracy</strong> - Percentage of expected concepts matched</li>
-        <li><strong>Tokens</strong> - Total tokens consumed (input + output)</li>
+        <li><strong>Tokens</strong> - Total tokens consumed (input + output). Lower = more efficient</li>
         <li><strong>Duration</strong> - Wall-clock execution time</li>
         <li><strong>Cost</strong> - Estimated API cost in USD</li>
         <li><strong>Tool Calls</strong> - Number of tool invocations</li>
+        <li><strong>Model</strong> - Claude model used (haiku, sonnet, opus)</li>
       </ul>
     </section>
 
@@ -772,6 +999,17 @@ function renderHowItWorksPage(): string {
       <p>Accuracy is calculated by matching response content against expected concepts:</p>
       <pre><code>accuracy = (matched_concepts / total_concepts) × 100%</code></pre>
       <p>The scorer uses fuzzy matching to handle variations like plurals, hyphens, and common abbreviations.</p>
+    </section>
+
+    <section class="doc-section">
+      <h2>Token Efficiency</h2>
+      <p>Token usage is captured from Claude Code CLI transcript after each run:</p>
+      <ul>
+        <li><strong>Input tokens</strong> - Prompt + context sent to Claude</li>
+        <li><strong>Output tokens</strong> - Claude's response + tool calls</li>
+        <li><strong>Total tokens</strong> - Input + Output (used for efficiency ranking)</li>
+      </ul>
+      <p>Skills achieving same accuracy with fewer tokens rank higher in token efficiency.</p>
     </section>
 
     <section class="doc-section">
@@ -859,16 +1097,604 @@ function renderDocLayout(title: string, content: string): string {
     <div class="nav-right">
       <a href="/docs">Docs</a>
       <a href="/how-it-works">How It Works</a>
-      <a href="https://github.com/claudekit/skillmark">GitHub</a>
+      <a href="https://github.com/claudekit/skillmark" title="GitHub"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg></a>
+      <a href="/login">Login</a>
     </div>
   </nav>
   <div class="container">
     <h1>${title}</h1>
     ${content}
     <footer>
-      <a href="https://github.com/claudekit/skillmark">Skillmark</a> · Built for AI agent developers
+      <a href="https://github.com/claudekit/skillmark">Skillmark</a> · Built for AI agent developers · by <a href="https://claudekit.cc">ClaudeKit.cc</a>
     </footer>
   </div>
+</body>
+</html>`;
+}
+
+/** Result row for skill detail page */
+interface SkillResultRow {
+  accuracy: number;
+  model: string;
+  tokensTotal: number;
+  costUsd: number;
+  createdAt: string | null;
+  submitterGithub: string | null;
+  skillshLink: string | null;
+  testFiles: Array<{ name: string; content: string }> | null;
+}
+
+/**
+ * Render skill detail page with result history and test files
+ */
+function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[]): string {
+  const latestResult = results[0];
+  const skillshLink = latestResult?.skillshLink || skill.skillshLink;
+
+  const resultRows = results.map((r, i) => `
+    <tr>
+      <td class="result-date">${r.createdAt ? formatRelativeTime(new Date(r.createdAt).getTime() / 1000) : '-'}</td>
+      <td class="result-model">${escapeHtml(r.model)}</td>
+      <td class="result-accuracy">${r.accuracy.toFixed(1)}%</td>
+      <td class="result-tokens">${r.tokensTotal?.toLocaleString() || '-'}</td>
+      <td class="result-cost">$${r.costUsd?.toFixed(4) || '-'}</td>
+      <td class="result-submitter">
+        ${r.submitterGithub ? `
+          <a href="https://github.com/${escapeHtml(r.submitterGithub)}" class="submitter-link">
+            <img src="https://github.com/${escapeHtml(r.submitterGithub)}.png?size=20" alt="" class="submitter-avatar-sm">
+            @${escapeHtml(r.submitterGithub)}
+          </a>
+        ` : '-'}
+      </td>
+    </tr>
+  `).join('');
+
+  // Render test files viewer if available
+  const testFilesSection = latestResult?.testFiles?.length ? `
+    <section class="test-files-section">
+      <h2>Test Files</h2>
+      <div class="test-files-tabs">
+        ${latestResult.testFiles.map((f, i) => `
+          <button class="test-file-tab ${i === 0 ? 'active' : ''}" data-index="${i}">${escapeHtml(f.name)}</button>
+        `).join('')}
+      </div>
+      <div class="test-files-content">
+        ${latestResult.testFiles.map((f, i) => `
+          <pre class="test-file-content ${i === 0 ? 'active' : ''}" data-index="${i}"><code>${escapeHtml(f.content)}</code></pre>
+        `).join('')}
+      </div>
+    </section>
+  ` : '';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(skill.skillName)} - Skillmark</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --bg: #000; --text: #ededed; --text-secondary: #888; --border: #333; }
+    body { font-family: 'Geist', -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); }
+    .nav-left { display: flex; align-items: center; gap: 0.5rem; }
+    .nav-left a { color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 0.5rem; }
+    .nav-right { display: flex; gap: 1.5rem; }
+    .nav-right a { color: var(--text-secondary); text-decoration: none; font-size: 0.875rem; }
+    .nav-right a:hover { color: var(--text); }
+    .container { max-width: 1000px; margin: 0 auto; padding: 3rem 1.5rem; }
+    .breadcrumb { color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1rem; }
+    .breadcrumb a { color: var(--text-secondary); text-decoration: none; }
+    .breadcrumb a:hover { color: var(--text); }
+    h1 { font-size: 2.5rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .skill-meta { display: flex; gap: 1.5rem; color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 2rem; }
+    .skill-meta a { color: #58a6ff; text-decoration: none; }
+    .skill-meta a:hover { text-decoration: underline; }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 3rem; }
+    .stat-card { background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+    .stat-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); margin-bottom: 0.5rem; }
+    .stat-value { font-family: 'Geist Mono', monospace; font-size: 1.5rem; font-weight: 500; }
+    .section { margin-bottom: 3rem; }
+    .section h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); margin-bottom: 1rem; }
+    .results-table { width: 100%; border-collapse: collapse; }
+    .results-table th { text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); font-weight: 500; padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
+    .results-table td { padding: 0.75rem 0; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
+    .result-accuracy { font-family: 'Geist Mono', monospace; font-weight: 500; }
+    .result-tokens, .result-cost { font-family: 'Geist Mono', monospace; color: var(--text-secondary); }
+    .submitter-link { display: flex; align-items: center; gap: 0.375rem; color: var(--text-secondary); text-decoration: none; font-size: 0.8125rem; }
+    .submitter-link:hover { color: var(--text); }
+    .submitter-avatar-sm { width: 16px; height: 16px; border-radius: 50%; }
+    .test-files-section { background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+    .test-files-section h2 { margin-bottom: 1rem; }
+    .test-files-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .test-file-tab { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-family: 'Geist Mono', monospace; font-size: 0.8125rem; }
+    .test-file-tab:hover { border-color: var(--text-secondary); }
+    .test-file-tab.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+    .test-file-content { display: none; background: #000; border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; max-height: 400px; overflow-y: auto; }
+    .test-file-content.active { display: block; }
+    .test-file-content code { font-family: 'Geist Mono', monospace; font-size: 0.8125rem; white-space: pre-wrap; }
+    footer { margin-top: 3rem; padding: 2rem 0; border-top: 1px solid var(--border); text-align: center; color: var(--text-secondary); font-size: 0.8125rem; }
+    footer a { color: var(--text); text-decoration: none; }
+    @media (max-width: 768px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .results-table { font-size: 0.8125rem; }
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <a href="/">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>Skillmark</span>
+      </a>
+    </div>
+    <div class="nav-right">
+      <a href="/docs">Docs</a>
+      <a href="/how-it-works">How It Works</a>
+      <a href="https://github.com/claudekit/skillmark" title="GitHub"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg></a>
+      <a href="/login">Login</a>
+    </div>
+  </nav>
+  <div class="container">
+    <div class="breadcrumb">
+      <a href="/">Leaderboard</a> / ${escapeHtml(skill.skillName)}
+    </div>
+    <h1>${escapeHtml(skill.skillName)}</h1>
+    <div class="skill-meta">
+      ${skill.source ? `<span>Source: <a href="${escapeHtml(skill.source)}">${escapeHtml(skill.source.replace('https://github.com/', ''))}</a></span>` : ''}
+      ${skillshLink ? `<span><a href="${escapeHtml(skillshLink)}">View on skill.sh</a></span>` : ''}
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Best Accuracy</div>
+        <div class="stat-value">${skill.bestAccuracy.toFixed(1)}%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Best Model</div>
+        <div class="stat-value">${escapeHtml(skill.bestModel)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Avg Tokens</div>
+        <div class="stat-value">${Math.round(skill.avgTokens).toLocaleString()}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Runs</div>
+        <div class="stat-value">${skill.totalRuns}</div>
+      </div>
+    </div>
+
+    <section class="section">
+      <h2>Result History</h2>
+      <table class="results-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Model</th>
+            <th>Accuracy</th>
+            <th>Tokens</th>
+            <th>Cost</th>
+            <th>Submitter</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${resultRows}
+        </tbody>
+      </table>
+    </section>
+
+    ${testFilesSection}
+
+    <footer>
+      <a href="https://github.com/claudekit/skillmark">Skillmark</a> · Built for AI agent developers · by <a href="https://claudekit.cc">ClaudeKit.cc</a>
+    </footer>
+  </div>
+
+  <script>
+    // Test file tab switching
+    document.querySelectorAll('.test-file-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const index = tab.dataset.index;
+        document.querySelectorAll('.test-file-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.test-file-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.querySelector('.test-file-content[data-index="' + index + '"]').classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>`;
+}
+
+/**
+ * Render login page with GitHub OAuth button
+ */
+function renderLoginPage(error?: string): string {
+  const errorMessage = error ? `
+    <div class="error-message">
+      ${error === 'oauth_failed' ? 'GitHub authentication failed. Please try again.' :
+        error === 'token_failed' ? 'Failed to authenticate with GitHub. Please try again.' :
+        'An error occurred. Please try again.'}
+    </div>
+  ` : '';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - Skillmark</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --bg: #000; --text: #ededed; --text-secondary: #888; --border: #333; }
+    body {
+      font-family: 'Geist', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); }
+    .nav-left { display: flex; align-items: center; gap: 0.5rem; }
+    .nav-left a { color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 0.5rem; }
+    .login-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .login-box {
+      max-width: 400px;
+      width: 100%;
+      text-align: center;
+    }
+    h1 { font-size: 2rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .subtitle { color: var(--text-secondary); margin-bottom: 2rem; }
+    .github-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      width: 100%;
+      padding: 0.875rem 1.5rem;
+      background: #ededed;
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    .github-btn:hover { background: #fff; }
+    .github-btn svg { width: 20px; height: 20px; }
+    .error-message {
+      background: rgba(248, 81, 73, 0.1);
+      border: 1px solid rgba(248, 81, 73, 0.3);
+      color: #f85149;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      font-size: 0.875rem;
+    }
+    .info-text {
+      margin-top: 2rem;
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+    }
+    .info-text a { color: var(--text); }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <a href="/">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>Skillmark</span>
+      </a>
+    </div>
+  </nav>
+  <div class="login-container">
+    <div class="login-box">
+      <h1>Sign in</h1>
+      <p class="subtitle">Get an API key to publish benchmark results</p>
+      ${errorMessage}
+      <a href="/auth/github" class="github-btn">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+        </svg>
+        Continue with GitHub
+      </a>
+      <p class="info-text">
+        By signing in, you agree to our <a href="/docs">Terms of Service</a>.
+      </p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+interface DashboardUser {
+  username: string;
+  avatar: string | null;
+  keys: Array<{
+    id: string;
+    createdAt: string | null;
+    lastUsedAt: string | null;
+  }>;
+}
+
+/**
+ * Render dashboard page with API key management
+ */
+function renderDashboardPage(user: DashboardUser): string {
+  const keyRows = user.keys.map(key => `
+    <tr data-key-id="${escapeHtml(key.id as string)}">
+      <td class="key-id">
+        <code>${escapeHtml((key.id as string).slice(0, 8))}...</code>
+      </td>
+      <td class="key-created">${key.createdAt ? formatRelativeTime(new Date(key.createdAt).getTime() / 1000) : 'Unknown'}</td>
+      <td class="key-used">${key.lastUsedAt ? formatRelativeTime(new Date(key.lastUsedAt).getTime() / 1000) : 'Never'}</td>
+      <td class="key-actions">
+        <button class="revoke-btn" onclick="revokeKey('${escapeHtml(key.id as string)}')">Revoke</button>
+      </td>
+    </tr>
+  `).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - Skillmark</title>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --bg: #000; --text: #ededed; --text-secondary: #888; --border: #333; --success: #3fb950; }
+    body {
+      font-family: 'Geist', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); }
+    .nav-left { display: flex; align-items: center; gap: 0.5rem; }
+    .nav-left a { color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 0.5rem; }
+    .nav-right { display: flex; align-items: center; gap: 1rem; }
+    .nav-right a { color: var(--text-secondary); text-decoration: none; font-size: 0.875rem; }
+    .nav-right a:hover { color: var(--text); }
+    .user-info { display: flex; align-items: center; gap: 0.5rem; }
+    .user-avatar { width: 28px; height: 28px; border-radius: 50%; }
+    .user-name { font-size: 0.875rem; }
+    .container { max-width: 800px; margin: 0 auto; padding: 3rem 1.5rem; }
+    h1 { font-size: 2rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .subtitle { color: var(--text-secondary); margin-bottom: 2rem; }
+    .section { margin-bottom: 3rem; }
+    .section h2 { font-size: 1rem; font-weight: 500; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); }
+    .generate-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.25rem;
+      background: var(--text);
+      color: var(--bg);
+      border: none;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      margin-bottom: 1.5rem;
+    }
+    .generate-btn:hover { background: #fff; }
+    .generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .new-key-display {
+      display: none;
+      background: rgba(63, 185, 80, 0.1);
+      border: 1px solid rgba(63, 185, 80, 0.3);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .new-key-display.visible { display: block; }
+    .new-key-display p { color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 0.75rem; }
+    .new-key-display .key-value {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #0a0a0a;
+      padding: 0.75rem;
+      border-radius: 6px;
+      font-family: 'Geist Mono', monospace;
+      font-size: 0.8125rem;
+      word-break: break-all;
+    }
+    .copy-btn {
+      flex-shrink: 0;
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+    }
+    .copy-btn:hover { color: var(--text); border-color: var(--text-secondary); }
+    .keys-table { width: 100%; border-collapse: collapse; }
+    .keys-table th {
+      text-align: left;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-secondary);
+      font-weight: 500;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .keys-table td { padding: 1rem 0; border-bottom: 1px solid var(--border); }
+    .keys-table code { font-family: 'Geist Mono', monospace; font-size: 0.8125rem; }
+    .key-created, .key-used { color: var(--text-secondary); font-size: 0.875rem; }
+    .revoke-btn {
+      background: none;
+      border: 1px solid #f85149;
+      color: #f85149;
+      padding: 0.375rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.8125rem;
+      cursor: pointer;
+    }
+    .revoke-btn:hover { background: rgba(248, 81, 73, 0.1); }
+    .empty-state { color: var(--text-secondary); padding: 2rem 0; }
+    .usage-section { background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+    .usage-section h3 { font-size: 0.875rem; font-weight: 500; margin-bottom: 1rem; }
+    .usage-section pre { background: #000; border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; margin-bottom: 0.75rem; }
+    .usage-section code { font-family: 'Geist Mono', monospace; font-size: 0.8125rem; }
+    .usage-section p { color: var(--text-secondary); font-size: 0.8125rem; }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <a href="/">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>Skillmark</span>
+      </a>
+    </div>
+    <div class="nav-right">
+      <div class="user-info">
+        ${user.avatar ? `<img src="${escapeHtml(user.avatar)}" alt="" class="user-avatar">` : ''}
+        <span class="user-name">${escapeHtml(user.username)}</span>
+      </div>
+      <a href="/auth/logout">Sign out</a>
+    </div>
+  </nav>
+  <div class="container">
+    <h1>Dashboard</h1>
+    <p class="subtitle">Manage your API keys for publishing benchmark results</p>
+
+    <div class="section">
+      <h2>API Keys</h2>
+      <button class="generate-btn" id="generateBtn" onclick="generateKey()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        Generate New Key
+      </button>
+
+      <div class="new-key-display" id="newKeyDisplay">
+        <p><strong>New API key created!</strong> Copy it now - you won't see it again.</p>
+        <div class="key-value">
+          <span id="newKeyValue"></span>
+          <button class="copy-btn" onclick="copyKey()">Copy</button>
+        </div>
+      </div>
+
+      ${user.keys.length > 0 ? `
+      <table class="keys-table">
+        <thead>
+          <tr>
+            <th>Key ID</th>
+            <th>Created</th>
+            <th>Last Used</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="keysTableBody">
+          ${keyRows}
+        </tbody>
+      </table>
+      ` : `
+      <p class="empty-state">No API keys yet. Generate one to start publishing benchmarks.</p>
+      `}
+    </div>
+
+    <div class="section">
+      <h2>Usage</h2>
+      <div class="usage-section">
+        <h3>Save your API key</h3>
+        <pre><code># Option 1: Environment variable
+export SKILLMARK_API_KEY=sk_your_key_here
+
+# Option 2: Config file (~/.skillmarkrc)
+echo "api_key=sk_your_key_here" > ~/.skillmarkrc</code></pre>
+        <p>The CLI reads from env var first, then ~/.skillmarkrc.</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="usage-section">
+        <h3>Publish with auto-publish flag</h3>
+        <pre><code># Run benchmark and auto-publish results
+skillmark run ./my-skill --publish
+
+# Or publish existing results
+skillmark publish ./skillmark-results/result.json</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function generateKey() {
+      const btn = document.getElementById('generateBtn');
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+
+      try {
+        const res = await fetch('/api/keys', { method: 'POST' });
+        const data = await res.json();
+
+        if (data.apiKey) {
+          document.getElementById('newKeyValue').textContent = data.apiKey;
+          document.getElementById('newKeyDisplay').classList.add('visible');
+          // Reload page to show new key in table
+          setTimeout(() => location.reload(), 100);
+        } else {
+          alert('Failed to generate key: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Failed to generate key: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg> Generate New Key';
+      }
+    }
+
+    function copyKey() {
+      const key = document.getElementById('newKeyValue').textContent;
+      navigator.clipboard.writeText(key).then(() => {
+        const btn = event.target;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 2000);
+      });
+    }
+
+    async function revokeKey(keyId) {
+      if (!confirm('Are you sure you want to revoke this API key? This cannot be undone.')) {
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/keys/' + keyId, { method: 'DELETE' });
+        const data = await res.json();
+
+        if (data.success) {
+          document.querySelector('tr[data-key-id="' + keyId + '"]').remove();
+        } else {
+          alert('Failed to revoke key: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Failed to revoke key: ' + err.message);
+      }
+    }
+  </script>
 </body>
 </html>`;
 }

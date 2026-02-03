@@ -26,6 +26,15 @@ interface ResultPayload {
   hash: string;
   timestamp: string;
   rawJson?: string;
+  // New fields for GitHub OAuth + enhanced tracking
+  testFiles?: Array<{ name: string; content: string }>;
+  skillshLink?: string;
+}
+
+/** API key info returned from verification */
+interface ApiKeyInfo {
+  githubUsername: string | null;
+  githubAvatar: string | null;
 }
 
 /**
@@ -33,15 +42,15 @@ interface ResultPayload {
  */
 apiRouter.post('/results', async (c) => {
   try {
-    // Verify API key
+    // Verify API key and get user info
     const authHeader = c.req.header('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return c.json({ error: 'Missing or invalid API key' }, 401);
     }
 
     const apiKey = authHeader.slice(7);
-    const isValid = await verifyApiKey(c.env.DB, apiKey);
-    if (!isValid) {
+    const keyInfo = await verifyApiKeyAndGetInfo(c.env.DB, apiKey);
+    if (!keyInfo) {
       return c.json({ error: 'Invalid API key' }, 401);
     }
 
@@ -66,13 +75,14 @@ apiRouter.post('/results', async (c) => {
     // Ensure skill exists
     await ensureSkillExists(c.env.DB, payload.skillId, payload.skillName, payload.source);
 
-    // Insert result
+    // Insert result with new fields
     const resultId = crypto.randomUUID();
     await c.env.DB.prepare(`
       INSERT INTO results (
         id, skill_id, model, accuracy, tokens_total, tokens_input, tokens_output,
-        duration_ms, cost_usd, tool_count, runs, hash, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        duration_ms, cost_usd, tool_count, runs, hash, raw_json,
+        submitter_github, test_files, skillsh_link
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       resultId,
       payload.skillId,
@@ -86,7 +96,10 @@ apiRouter.post('/results', async (c) => {
       payload.toolCount || null,
       payload.runs,
       payload.hash,
-      payload.rawJson || null
+      payload.rawJson || null,
+      keyInfo.githubUsername || null,
+      payload.testFiles ? JSON.stringify(payload.testFiles) : null,
+      payload.skillshLink || null
     ).run();
 
     // Update API key last used
@@ -100,6 +113,10 @@ apiRouter.post('/results', async (c) => {
       resultId,
       leaderboardUrl: `https://skillmark.workers.dev/?skill=${encodeURIComponent(payload.skillName)}`,
       rank,
+      submitter: keyInfo.githubUsername ? {
+        github: keyInfo.githubUsername,
+        avatar: keyInfo.githubAvatar,
+      } : null,
     });
   } catch (error) {
     console.error('Error submitting result:', error);
@@ -233,6 +250,26 @@ async function verifyApiKey(db: D1Database, apiKey: string): Promise<boolean> {
   `).bind(keyHash).first();
 
   return result !== null;
+}
+
+/**
+ * Verify API key and return associated user info
+ */
+async function verifyApiKeyAndGetInfo(db: D1Database, apiKey: string): Promise<ApiKeyInfo | null> {
+  const keyHash = await hashApiKey(apiKey);
+
+  const result = await db.prepare(`
+    SELECT github_username, github_avatar FROM api_keys WHERE key_hash = ?
+  `).bind(keyHash).first();
+
+  if (!result) {
+    return null;
+  }
+
+  return {
+    githubUsername: result.github_username as string | null,
+    githubAvatar: result.github_avatar as string | null,
+  };
 }
 
 /**

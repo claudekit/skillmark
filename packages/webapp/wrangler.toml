@@ -9,3 +9,8 @@ database_id = "e1b45b94-f799-4e75-83f2-bebd777b040d"
 
 [vars]
 ENVIRONMENT = "development"
+
+# Required secrets (set via wrangler secret put):
+# - GITHUB_CLIENT_ID: GitHub OAuth App client ID
+# - GITHUB_CLIENT_SECRET: GitHub OAuth App client secret
+# - SESSION_SECRET: Random secret for signing session cookies
