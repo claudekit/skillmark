@@ -28,8 +28,8 @@ program
   .command('run')
   .description('Run benchmark against a skill')
   .argument('<skill-source>', 'Skill source (local path, git URL, or skill.sh reference)')
-  .option('-t, --tests <path>', 'Path to test suite directory', './tests')
-  .option('-m, --model <model>', 'Model to use (haiku|sonnet|opus)', 'sonnet')
+  .option('-t, --tests <path>', 'Path to test suite directory (default: <skill>/tests)')
+  .option('-m, --model <model>', 'Model to use (haiku|sonnet|opus)', 'opus')
   .option('-r, --runs <n>', 'Number of iterations', '3')
   .option('-o, --output <dir>', 'Output directory', './skillmark-results')
   .option('-p, --publish', 'Auto-publish results after benchmark completes')
@@ -79,7 +79,7 @@ program
         if (!apiKey) {
           console.error(chalk.red('No API key found.'));
           console.error(chalk.gray('Provide via --api-key, SKILLMARK_API_KEY env, or ~/.skillmarkrc'));
-          console.error(chalk.gray('\nGet your API key at: https://skillmark.workers.dev/login'));
+          console.error(chalk.gray('\nGet your API key at: https://skillmark.sh/login'));
           process.exit(1);
         }
 
@@ -120,7 +120,7 @@ program
       if (!apiKey) {
         console.error(chalk.red('No API key found.'));
         console.error(chalk.gray('Provide via --api-key, SKILLMARK_API_KEY env, or ~/.skillmarkrc'));
-        console.error(chalk.gray('\nGet your API key at: https://skillmark.workers.dev/login'));
+        console.error(chalk.gray('\nGet your API key at: https://skillmark.sh/login'));
         process.exit(1);
       }
 
@@ -130,6 +130,27 @@ program
       });
     } catch (error) {
       console.error(chalk.red(`\nError: ${error instanceof Error ? error.message : error}`));
+      process.exit(1);
+    }
+  });
+
+// Auth command - save API key
+program
+  .command('auth')
+  .description('Save API key to ~/.skillmarkrc')
+  .argument('<api-key>', 'Your Skillmark API key (get it at https://skillmark.sh/login)')
+  .action(async (apiKey: string) => {
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { homedir } = await import('node:os');
+
+    try {
+      const rcPath = join(homedir(), '.skillmarkrc');
+      await writeFile(rcPath, `api_key=${apiKey}\n`, 'utf-8');
+      console.log(chalk.green('✓ API key saved to ~/.skillmarkrc'));
+      console.log(chalk.gray('\nYou can now use: skillmark run <skill> --publish'));
+    } catch (error) {
+      console.error(chalk.red(`Error saving API key: ${error instanceof Error ? error.message : error}`));
       process.exit(1);
     }
   });

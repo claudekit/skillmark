@@ -13,10 +13,15 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { apiRouter } from './routes/api-endpoints-handler.js';
 import { pagesRouter } from './routes/html-pages-renderer.js';
+import { authRouter } from './routes/github-oauth-authentication-handler.js';
+import { assetsRouter } from './routes/static-assets-handler.js';
 
 type Bindings = {
   DB: D1Database;
   ENVIRONMENT: string;
+  GITHUB_CLIENT_ID: string;
+  GITHUB_CLIENT_SECRET: string;
+  SESSION_SECRET: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -40,6 +45,12 @@ app.use('*', async (c, next) => {
 app.get('/health', (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Static assets (favicon, og-image)
+app.route('/', assetsRouter);
+
+// Auth routes (GitHub OAuth)
+app.route('/auth', authRouter);
 
 // API routes
 app.route('/api', apiRouter);

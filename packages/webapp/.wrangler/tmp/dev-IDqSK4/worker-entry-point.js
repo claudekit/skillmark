@@ -2242,8 +2242,8 @@ apiRouter.post("/results", async (c) => {
       return c.json({ error: "Missing or invalid API key" }, 401);
     }
     const apiKey = authHeader.slice(7);
-    const isValid = await verifyApiKey(c.env.DB, apiKey);
-    if (!isValid) {
+    const keyInfo = await verifyApiKeyAndGetInfo(c.env.DB, apiKey);
+    if (!keyInfo) {
       return c.json({ error: "Invalid API key" }, 401);
     }
     const payload = await c.req.json();
@@ -2261,8 +2261,9 @@ apiRouter.post("/results", async (c) => {
     await c.env.DB.prepare(`
       INSERT INTO results (
         id, skill_id, model, accuracy, tokens_total, tokens_input, tokens_output,
-        duration_ms, cost_usd, tool_count, runs, hash, raw_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        duration_ms, cost_usd, tool_count, runs, hash, raw_json,
+        submitter_github, test_files, skillsh_link
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       resultId,
       payload.skillId,
@@ -2276,15 +2277,22 @@ apiRouter.post("/results", async (c) => {
       payload.toolCount || null,
       payload.runs,
       payload.hash,
-      payload.rawJson || null
+      payload.rawJson || null,
+      keyInfo.githubUsername || null,
+      payload.testFiles ? JSON.stringify(payload.testFiles) : null,
+      payload.skillshLink || null
     ).run();
     await updateApiKeyLastUsed(c.env.DB, apiKey);
     const rank = await getSkillRank(c.env.DB, payload.skillId);
     return c.json({
       success: true,
       resultId,
-      leaderboardUrl: `https://skillmark.workers.dev/?skill=${encodeURIComponent(payload.skillName)}`,
-      rank
+      leaderboardUrl: `https://skillmark.sh/?skill=${encodeURIComponent(payload.skillName)}`,
+      rank,
+      submitter: keyInfo.githubUsername ? {
+        github: keyInfo.githubUsername,
+        avatar: keyInfo.githubAvatar
+      } : null
     });
   } catch (error) {
     console.error("Error submitting result:", error);
@@ -2385,6 +2393,20 @@ async function verifyApiKey(db, apiKey) {
   return result !== null;
 }
 __name(verifyApiKey, "verifyApiKey");
+async function verifyApiKeyAndGetInfo(db, apiKey) {
+  const keyHash = await hashApiKey(apiKey);
+  const result = await db.prepare(`
+    SELECT github_username, github_avatar FROM api_keys WHERE key_hash = ?
+  `).bind(keyHash).first();
+  if (!result) {
+    return null;
+  }
+  return {
+    githubUsername: result.github_username,
+    githubAvatar: result.github_avatar
+  };
+}
+__name(verifyApiKeyAndGetInfo, "verifyApiKeyAndGetInfo");
 async function updateApiKeyLastUsed(db, apiKey) {
   const keyHash = await hashApiKey(apiKey);
   await db.prepare(`
@@ -2427,22 +2449,26 @@ __name(getSkillRank, "getSkillRank");
 var pagesRouter = new Hono2();
 pagesRouter.get("/", async (c) => {
   try {
+    const cookieHeader = c.req.header("Cookie") || "";
+    const currentUser = await getCurrentUser(c.env.DB, cookieHeader);
     const results = await c.env.DB.prepare(`
       SELECT
-        skill_id as skillId,
-        skill_name as skillName,
-        source,
-        best_accuracy as bestAccuracy,
-        best_model as bestModel,
-        avg_tokens as avgTokens,
-        avg_cost as avgCost,
-        last_tested as lastTested,
-        total_runs as totalRuns
-      FROM leaderboard
+        l.skill_id as skillId,
+        l.skill_name as skillName,
+        l.source,
+        l.best_accuracy as bestAccuracy,
+        l.best_model as bestModel,
+        l.avg_tokens as avgTokens,
+        l.avg_cost as avgCost,
+        l.last_tested as lastTested,
+        l.total_runs as totalRuns,
+        (SELECT submitter_github FROM results WHERE skill_id = l.skill_id ORDER BY created_at DESC LIMIT 1) as submitterGithub,
+        (SELECT skillsh_link FROM results WHERE skill_id = l.skill_id AND skillsh_link IS NOT NULL ORDER BY created_at DESC LIMIT 1) as skillshLink
+      FROM leaderboard l
       LIMIT 50
     `).all();
     const entries = results.results || [];
-    return c.html(renderLeaderboardPage(entries));
+    return c.html(renderLeaderboardPage(entries, currentUser));
   } catch (error) {
     console.error("Error rendering leaderboard:", error);
     return c.html(renderErrorPage("Failed to load leaderboard"));
@@ -2454,19 +2480,173 @@ pagesRouter.get("/docs", (c) => {
 pagesRouter.get("/how-it-works", (c) => {
   return c.html(renderHowItWorksPage());
 });
-function renderLeaderboardPage(entries) {
+pagesRouter.get("/skill/:name", async (c) => {
+  try {
+    const skillName = decodeURIComponent(c.req.param("name"));
+    const skill = await c.env.DB.prepare(`
+      SELECT
+        l.skill_id as skillId,
+        l.skill_name as skillName,
+        l.source,
+        l.best_accuracy as bestAccuracy,
+        l.best_model as bestModel,
+        l.avg_tokens as avgTokens,
+        l.avg_cost as avgCost,
+        l.last_tested as lastTested,
+        l.total_runs as totalRuns
+      FROM leaderboard l
+      WHERE l.skill_name = ?
+    `).bind(skillName).first();
+    if (!skill) {
+      return c.html(renderErrorPage("Skill not found"), 404);
+    }
+    const results = await c.env.DB.prepare(`
+      SELECT
+        r.accuracy,
+        r.model,
+        r.tokens_total as tokensTotal,
+        r.cost_usd as costUsd,
+        r.created_at as createdAt,
+        r.submitter_github as submitterGithub,
+        r.skillsh_link as skillshLink,
+        r.test_files as testFiles
+      FROM results r
+      WHERE r.skill_id = ?
+      ORDER BY r.created_at DESC
+      LIMIT 20
+    `).bind(skill.skillId).all();
+    const formattedResults = results.results?.map((r) => ({
+      accuracy: r.accuracy,
+      model: r.model,
+      tokensTotal: r.tokensTotal,
+      costUsd: r.costUsd,
+      createdAt: r.createdAt ? new Date(r.createdAt * 1e3).toISOString() : null,
+      submitterGithub: r.submitterGithub,
+      skillshLink: r.skillshLink,
+      testFiles: r.testFiles ? JSON.parse(r.testFiles) : null
+    })) || [];
+    return c.html(renderSkillDetailPage(skill, formattedResults));
+  } catch (error) {
+    console.error("Error rendering skill page:", error);
+    return c.html(renderErrorPage("Failed to load skill details"));
+  }
+});
+pagesRouter.get("/login", (c) => {
+  const error = c.req.query("error");
+  return c.html(renderLoginPage(error));
+});
+pagesRouter.get("/dashboard", async (c) => {
+  const cookieHeader = c.req.header("Cookie") || "";
+  const sessionId = parseCookie(cookieHeader, "skillmark_session");
+  if (!sessionId) {
+    return c.redirect("/login");
+  }
+  const session = await c.env.DB.prepare(`
+    SELECT u.id, u.github_username, u.github_avatar
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.id = ? AND s.expires_at > unixepoch()
+  `).bind(sessionId).first();
+  if (!session) {
+    return c.redirect("/login");
+  }
+  const keys = await c.env.DB.prepare(`
+    SELECT id, created_at, last_used_at
+    FROM api_keys
+    WHERE github_username = ?
+    ORDER BY created_at DESC
+  `).bind(session.github_username).all();
+  const formattedKeys = keys.results?.map((key) => ({
+    id: key.id,
+    createdAt: key.created_at ? new Date(key.created_at * 1e3).toISOString() : null,
+    lastUsedAt: key.last_used_at ? new Date(key.last_used_at * 1e3).toISOString() : null
+  })) || [];
+  return c.html(renderDashboardPage({
+    username: session.github_username,
+    avatar: session.github_avatar,
+    keys: formattedKeys
+  }));
+});
+function parseCookie(cookieHeader, name) {
+  const cookies = cookieHeader.split(";");
+  for (const cookie of cookies) {
+    const [cookieName, ...rest] = cookie.trim().split("=");
+    if (cookieName === name) {
+      return rest.join("=");
+    }
+  }
+  return null;
+}
+__name(parseCookie, "parseCookie");
+async function getCurrentUser(db, cookieHeader) {
+  const sessionId = parseCookie(cookieHeader, "skillmark_session");
+  if (!sessionId)
+    return null;
+  const session = await db.prepare(`
+    SELECT u.github_username, u.github_avatar
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.id = ? AND s.expires_at > unixepoch()
+  `).bind(sessionId).first();
+  if (!session)
+    return null;
+  return {
+    username: session.github_username,
+    avatar: session.github_avatar
+  };
+}
+__name(getCurrentUser, "getCurrentUser");
+function renderNav(currentUser) {
+  const userSection = currentUser ? `<a href="/dashboard" class="user-nav">
+        <img src="${currentUser.avatar || `https://github.com/${currentUser.username}.png?size=32`}" alt="" class="user-avatar">
+        <span>@${escapeHtml(currentUser.username)}</span>
+      </a>` : `<a href="/login">Login</a>`;
+  return `
+  <nav>
+    <div class="nav-left">
+      <a href="/" class="nav-home">
+        <svg class="nav-logo" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+        </svg>
+        <span class="nav-divider">/</span>
+        <span class="nav-title">Skillmark</span>
+      </a>
+    </div>
+    <div class="nav-right">
+      <a href="/docs">Docs</a>
+      <a href="/how-it-works">How It Works</a>
+      <a href="https://github.com/claudekit/skillmark" title="GitHub"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg></a>
+      ${userSection}
+    </div>
+  </nav>`;
+}
+__name(renderNav, "renderNav");
+function renderLeaderboardPage(entries, currentUser = null) {
   const totalRuns = entries.reduce((sum, e) => sum + e.totalRuns, 0);
   const rows = entries.map((entry, index) => {
     const rank = index + 1;
     const accuracy = entry.bestAccuracy.toFixed(1);
     const source = entry.source || "";
     const repoPath = source.replace("https://github.com/", "").replace(/\.git$/, "");
+    const submitter = entry.submitterGithub;
+    const skillshLink = entry.skillshLink;
     return `
-      <tr>
+      <tr onclick="window.location='/skill/${encodeURIComponent(entry.skillName)}'" style="cursor: pointer;">
         <td class="rank">${rank}</td>
         <td class="skill">
-          <span class="skill-name">${escapeHtml(entry.skillName)}</span>
-          ${repoPath ? `<span class="skill-repo">${escapeHtml(repoPath)}</span>` : ""}
+          <div class="skill-info">
+            <span class="skill-name">${escapeHtml(entry.skillName)}</span>
+            ${repoPath ? `<span class="skill-repo">${escapeHtml(repoPath)}</span>` : ""}
+            ${skillshLink ? `<a href="${escapeHtml(skillshLink)}" class="skillsh-link" onclick="event.stopPropagation()">skill.sh</a>` : ""}
+          </div>
+        </td>
+        <td class="submitter">
+          ${submitter ? `
+            <a href="https://github.com/${escapeHtml(submitter)}" class="submitter-link" onclick="event.stopPropagation()">
+              <img src="https://github.com/${escapeHtml(submitter)}.png?size=24" alt="" class="submitter-avatar">
+              <span>@${escapeHtml(submitter)}</span>
+            </a>
+          ` : '<span class="no-submitter">-</span>'}
         </td>
         <td class="accuracy">${accuracy}%</td>
       </tr>
@@ -2479,6 +2659,26 @@ function renderLeaderboardPage(entries) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Skillmark - Agent Skill Benchmarks</title>
   <meta name="description" content="The open agent skill benchmarking platform. Test and compare AI agent skills with detailed metrics.">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/favicon.png">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://skillmark.sh/">
+  <meta property="og:title" content="Skillmark - Agent Skill Benchmarks">
+  <meta property="og:description" content="Benchmark your AI agent skills with detailed metrics. Compare accuracy, token usage, and cost across models.">
+  <meta property="og:image" content="https://cdn.claudekit.cc/skillmark/og-image.png">
+  <meta property="og:site_name" content="Skillmark">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://skillmark.sh/">
+  <meta name="twitter:title" content="Skillmark - Agent Skill Benchmarks">
+  <meta name="twitter:description" content="Benchmark your AI agent skills with detailed metrics. Compare accuracy, token usage, and cost across models.">
+  <meta name="twitter:image" content="https://cdn.claudekit.cc/skillmark/og-image.png">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -2547,6 +2747,25 @@ function renderLeaderboardPage(entries) {
 
     .nav-right a:hover {
       color: var(--text);
+    }
+
+    .user-nav {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .user-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+    }
+
+    .nav-home {
+      display: flex;
+      align-items: center;
+      text-decoration: none;
+      color: inherit;
     }
 
     /* Main container */
@@ -2789,6 +3008,12 @@ function renderLeaderboardPage(entries) {
       gap: 0.125rem;
     }
 
+    .skill-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.125rem;
+    }
+
     .skill-name {
       font-weight: 500;
     }
@@ -2796,6 +3021,43 @@ function renderLeaderboardPage(entries) {
     .skill-repo {
       font-family: 'Geist Mono', monospace;
       font-size: 0.8125rem;
+      color: var(--text-secondary);
+    }
+
+    .skillsh-link {
+      font-size: 0.75rem;
+      color: #58a6ff;
+      text-decoration: none;
+    }
+
+    .skillsh-link:hover {
+      text-decoration: underline;
+    }
+
+    .submitter {
+      width: 150px;
+    }
+
+    .submitter-link {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.8125rem;
+    }
+
+    .submitter-link:hover {
+      color: var(--text);
+    }
+
+    .submitter-avatar {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+    }
+
+    .no-submitter {
       color: var(--text-secondary);
     }
 
@@ -2878,20 +3140,7 @@ function renderLeaderboardPage(entries) {
   </style>
 </head>
 <body>
-  <nav>
-    <div class="nav-left">
-      <svg class="nav-logo" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-      </svg>
-      <span class="nav-divider">/</span>
-      <span class="nav-title">Skillmark</span>
-    </div>
-    <div class="nav-right">
-      <a href="/docs">Docs</a>
-      <a href="/how-it-works">How It Works</a>
-      <a href="https://github.com/claudekit/skillmark">GitHub</a>
-    </div>
-  </nav>
+  ${renderNav(currentUser)}
 
   <div class="container">
     <!-- Hero -->
@@ -2949,6 +3198,7 @@ function renderLeaderboardPage(entries) {
       <div class="tabs">
         <button class="tab active">All Time <span class="tab-count">(${entries.length.toLocaleString()})</span></button>
         <button class="tab">By Accuracy</button>
+        <button class="tab">By Tokens</button>
         <button class="tab">By Cost</button>
       </div>
 
@@ -2958,6 +3208,7 @@ function renderLeaderboardPage(entries) {
           <tr>
             <th>#</th>
             <th>Skill</th>
+            <th>Submitter</th>
             <th>Accuracy</th>
           </tr>
         </thead>
@@ -2980,7 +3231,8 @@ function renderLeaderboardPage(entries) {
       <p>
         Built with <a href="https://github.com/claudekit/skillmark">Skillmark</a> \xB7
         <a href="https://www.npmjs.com/package/skillmark">npm</a> \xB7
-        <a href="https://github.com/claudekit/skillmark">GitHub</a>
+        <a href="https://github.com/claudekit/skillmark">GitHub</a> \xB7
+        by <a href="https://claudekit.cc">ClaudeKit.cc</a>
       </p>
     </footer>
   </div>
@@ -3014,6 +3266,7 @@ function renderErrorPage(message) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Error - Skillmark</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -3065,11 +3318,22 @@ npx skillmark</code></pre>
     </section>
 
     <section class="doc-section">
+      <h2>Requirements</h2>
+      <ul>
+        <li><strong>Claude Code CLI</strong> - Skillmark runs benchmarks using Claude Code locally</li>
+        <li><strong>Claude Max subscription</strong> - Required for Claude Code API access</li>
+      </ul>
+      <p>All benchmarks run 100% locally on your machine.</p>
+    </section>
+
+    <section class="doc-section">
       <h2>Quick Start</h2>
       <p>Run your first benchmark in 3 steps:</p>
 
-      <h3>1. Create a test file</h3>
-      <p>Create <code>tests/my-test.md</code> with YAML frontmatter:</p>
+      <h3>1. Test Files (Auto-generated)</h3>
+      <p>Skillmark auto-generates test files based on your skill's SKILL.md. Just run:</p>
+      <pre><code>skillmark run ./my-skill</code></pre>
+      <p>Or create tests manually with YAML frontmatter:</p>
       <pre><code>---
 name: my-first-test
 type: knowledge
@@ -3110,10 +3374,31 @@ Your question or task here.
       <h2>Options</h2>
       <table>
         <tr><td><code>--tests &lt;path&gt;</code></td><td>Path to test suite (default: ./tests)</td></tr>
-        <tr><td><code>--model &lt;model&gt;</code></td><td>haiku | sonnet | opus (default: sonnet)</td></tr>
+        <tr><td><code>--model &lt;model&gt;</code></td><td>haiku | sonnet | opus (default: opus)</td></tr>
         <tr><td><code>--runs &lt;n&gt;</code></td><td>Number of iterations (default: 3)</td></tr>
         <tr><td><code>--output &lt;dir&gt;</code></td><td>Output directory (default: ./skillmark-results)</td></tr>
+        <tr><td><code>--publish</code></td><td>Auto-publish results to leaderboard</td></tr>
       </table>
+    </section>
+
+    <section class="doc-section">
+      <h2>Publishing Results</h2>
+      <h3>1. Get API Key</h3>
+      <p><a href="/login">Login with GitHub</a> to get your API key from the dashboard.</p>
+
+      <h3>2. Save API Key</h3>
+      <pre><code># Option 1: Environment variable
+export SKILLMARK_API_KEY=sk_your_key
+
+# Option 2: Config file
+echo "api_key=sk_your_key" > ~/.skillmarkrc</code></pre>
+
+      <h3>3. Publish</h3>
+      <pre><code># Auto-publish after benchmark
+skillmark run ./my-skill --publish
+
+# Or publish existing results
+skillmark publish ./skillmark-results/result.json</code></pre>
     </section>
   `);
 }
@@ -3125,10 +3410,11 @@ function renderHowItWorksPage() {
       <p>Skillmark benchmarks AI agent skills by running standardized tests and measuring key metrics:</p>
       <ul>
         <li><strong>Accuracy</strong> - Percentage of expected concepts matched</li>
-        <li><strong>Tokens</strong> - Total tokens consumed (input + output)</li>
+        <li><strong>Tokens</strong> - Total tokens consumed (input + output). Lower = more efficient</li>
         <li><strong>Duration</strong> - Wall-clock execution time</li>
         <li><strong>Cost</strong> - Estimated API cost in USD</li>
         <li><strong>Tool Calls</strong> - Number of tool invocations</li>
+        <li><strong>Model</strong> - Claude model used (haiku, sonnet, opus)</li>
       </ul>
     </section>
 
@@ -3145,6 +3431,17 @@ function renderHowItWorksPage() {
       <p>Accuracy is calculated by matching response content against expected concepts:</p>
       <pre><code>accuracy = (matched_concepts / total_concepts) \xD7 100%</code></pre>
       <p>The scorer uses fuzzy matching to handle variations like plurals, hyphens, and common abbreviations.</p>
+    </section>
+
+    <section class="doc-section">
+      <h2>Token Efficiency</h2>
+      <p>Token usage is captured from Claude Code CLI transcript after each run:</p>
+      <ul>
+        <li><strong>Input tokens</strong> - Prompt + context sent to Claude</li>
+        <li><strong>Output tokens</strong> - Claude's response + tool calls</li>
+        <li><strong>Total tokens</strong> - Input + Output (used for efficiency ranking)</li>
+      </ul>
+      <p>Skills achieving same accuracy with fewer tokens rank higher in token efficiency.</p>
     </section>
 
     <section class="doc-section">
@@ -3187,6 +3484,7 @@ function renderDocLayout(title, content) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title} - Skillmark</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -3229,26 +3527,1068 @@ function renderDocLayout(title, content) {
     <div class="nav-right">
       <a href="/docs">Docs</a>
       <a href="/how-it-works">How It Works</a>
-      <a href="https://github.com/claudekit/skillmark">GitHub</a>
+      <a href="https://github.com/claudekit/skillmark" title="GitHub"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg></a>
+      <a href="/login">Login</a>
     </div>
   </nav>
   <div class="container">
     <h1>${title}</h1>
     ${content}
     <footer>
-      <a href="https://github.com/claudekit/skillmark">Skillmark</a> \xB7 Built for AI agent developers
+      <a href="https://github.com/claudekit/skillmark">Skillmark</a> \xB7 Built for AI agent developers \xB7 by <a href="https://claudekit.cc">ClaudeKit.cc</a>
     </footer>
   </div>
 </body>
 </html>`;
 }
 __name(renderDocLayout, "renderDocLayout");
+function renderSkillDetailPage(skill, results) {
+  const latestResult = results[0];
+  const skillshLink = latestResult?.skillshLink || skill.skillshLink;
+  const resultRows = results.map((r, i) => `
+    <tr>
+      <td class="result-date">${r.createdAt ? formatRelativeTime(new Date(r.createdAt).getTime() / 1e3) : "-"}</td>
+      <td class="result-model">${escapeHtml(r.model)}</td>
+      <td class="result-accuracy">${r.accuracy.toFixed(1)}%</td>
+      <td class="result-tokens">${r.tokensTotal?.toLocaleString() || "-"}</td>
+      <td class="result-cost">$${r.costUsd?.toFixed(4) || "-"}</td>
+      <td class="result-submitter">
+        ${r.submitterGithub ? `
+          <a href="https://github.com/${escapeHtml(r.submitterGithub)}" class="submitter-link">
+            <img src="https://github.com/${escapeHtml(r.submitterGithub)}.png?size=20" alt="" class="submitter-avatar-sm">
+            @${escapeHtml(r.submitterGithub)}
+          </a>
+        ` : "-"}
+      </td>
+    </tr>
+  `).join("");
+  const testFilesSection = latestResult?.testFiles?.length ? `
+    <section class="test-files-section">
+      <h2>Test Files</h2>
+      <div class="test-files-tabs">
+        ${latestResult.testFiles.map((f, i) => `
+          <button class="test-file-tab ${i === 0 ? "active" : ""}" data-index="${i}">${escapeHtml(f.name)}</button>
+        `).join("")}
+      </div>
+      <div class="test-files-content">
+        ${latestResult.testFiles.map((f, i) => `
+          <pre class="test-file-content ${i === 0 ? "active" : ""}" data-index="${i}"><code>${escapeHtml(f.content)}</code></pre>
+        `).join("")}
+      </div>
+    </section>
+  ` : "";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHtml(skill.skillName)} - Skillmark</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --bg: #000; --text: #ededed; --text-secondary: #888; --border: #333; }
+    body { font-family: 'Geist', -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); }
+    .nav-left { display: flex; align-items: center; gap: 0.5rem; }
+    .nav-left a { color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 0.5rem; }
+    .nav-right { display: flex; gap: 1.5rem; }
+    .nav-right a { color: var(--text-secondary); text-decoration: none; font-size: 0.875rem; }
+    .nav-right a:hover { color: var(--text); }
+    .container { max-width: 1000px; margin: 0 auto; padding: 3rem 1.5rem; }
+    .breadcrumb { color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 1rem; }
+    .breadcrumb a { color: var(--text-secondary); text-decoration: none; }
+    .breadcrumb a:hover { color: var(--text); }
+    h1 { font-size: 2.5rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .skill-meta { display: flex; gap: 1.5rem; color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 2rem; }
+    .skill-meta a { color: #58a6ff; text-decoration: none; }
+    .skill-meta a:hover { text-decoration: underline; }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 3rem; }
+    .stat-card { background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+    .stat-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); margin-bottom: 0.5rem; }
+    .stat-value { font-family: 'Geist Mono', monospace; font-size: 1.5rem; font-weight: 500; }
+    .section { margin-bottom: 3rem; }
+    .section h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); margin-bottom: 1rem; }
+    .results-table { width: 100%; border-collapse: collapse; }
+    .results-table th { text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); font-weight: 500; padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
+    .results-table td { padding: 0.75rem 0; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
+    .result-accuracy { font-family: 'Geist Mono', monospace; font-weight: 500; }
+    .result-tokens, .result-cost { font-family: 'Geist Mono', monospace; color: var(--text-secondary); }
+    .submitter-link { display: flex; align-items: center; gap: 0.375rem; color: var(--text-secondary); text-decoration: none; font-size: 0.8125rem; }
+    .submitter-link:hover { color: var(--text); }
+    .submitter-avatar-sm { width: 16px; height: 16px; border-radius: 50%; }
+    .test-files-section { background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+    .test-files-section h2 { margin-bottom: 1rem; }
+    .test-files-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .test-file-tab { background: transparent; border: 1px solid var(--border); color: var(--text-secondary); padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-family: 'Geist Mono', monospace; font-size: 0.8125rem; }
+    .test-file-tab:hover { border-color: var(--text-secondary); }
+    .test-file-tab.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+    .test-file-content { display: none; background: #000; border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; max-height: 400px; overflow-y: auto; }
+    .test-file-content.active { display: block; }
+    .test-file-content code { font-family: 'Geist Mono', monospace; font-size: 0.8125rem; white-space: pre-wrap; }
+    footer { margin-top: 3rem; padding: 2rem 0; border-top: 1px solid var(--border); text-align: center; color: var(--text-secondary); font-size: 0.8125rem; }
+    footer a { color: var(--text); text-decoration: none; }
+    @media (max-width: 768px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .results-table { font-size: 0.8125rem; }
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <a href="/">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>Skillmark</span>
+      </a>
+    </div>
+    <div class="nav-right">
+      <a href="/docs">Docs</a>
+      <a href="/how-it-works">How It Works</a>
+      <a href="https://github.com/claudekit/skillmark" title="GitHub"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg></a>
+      <a href="/login">Login</a>
+    </div>
+  </nav>
+  <div class="container">
+    <div class="breadcrumb">
+      <a href="/">Leaderboard</a> / ${escapeHtml(skill.skillName)}
+    </div>
+    <h1>${escapeHtml(skill.skillName)}</h1>
+    <div class="skill-meta">
+      ${skill.source ? `<span>Source: <a href="${escapeHtml(skill.source)}">${escapeHtml(skill.source.replace("https://github.com/", ""))}</a></span>` : ""}
+      ${skillshLink ? `<span><a href="${escapeHtml(skillshLink)}">View on skill.sh</a></span>` : ""}
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-label">Best Accuracy</div>
+        <div class="stat-value">${skill.bestAccuracy.toFixed(1)}%</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Best Model</div>
+        <div class="stat-value">${escapeHtml(skill.bestModel)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Avg Tokens</div>
+        <div class="stat-value">${Math.round(skill.avgTokens).toLocaleString()}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Runs</div>
+        <div class="stat-value">${skill.totalRuns}</div>
+      </div>
+    </div>
+
+    <section class="section">
+      <h2>Result History</h2>
+      <table class="results-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Model</th>
+            <th>Accuracy</th>
+            <th>Tokens</th>
+            <th>Cost</th>
+            <th>Submitter</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${resultRows}
+        </tbody>
+      </table>
+    </section>
+
+    ${testFilesSection}
+
+    <footer>
+      <a href="https://github.com/claudekit/skillmark">Skillmark</a> \xB7 Built for AI agent developers \xB7 by <a href="https://claudekit.cc">ClaudeKit.cc</a>
+    </footer>
+  </div>
+
+  <script>
+    // Test file tab switching
+    document.querySelectorAll('.test-file-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const index = tab.dataset.index;
+        document.querySelectorAll('.test-file-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.test-file-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.querySelector('.test-file-content[data-index="' + index + '"]').classList.add('active');
+      });
+    });
+  <\/script>
+</body>
+</html>`;
+}
+__name(renderSkillDetailPage, "renderSkillDetailPage");
+function renderLoginPage(error) {
+  const errorMessage = error ? `
+    <div class="error-message">
+      ${error === "oauth_failed" ? "GitHub authentication failed. Please try again." : error === "token_failed" ? "Failed to authenticate with GitHub. Please try again." : "An error occurred. Please try again."}
+    </div>
+  ` : "";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - Skillmark</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --bg: #000; --text: #ededed; --text-secondary: #888; --border: #333; }
+    body {
+      font-family: 'Geist', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); }
+    .nav-left { display: flex; align-items: center; gap: 0.5rem; }
+    .nav-left a { color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 0.5rem; }
+    .login-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .login-box {
+      max-width: 400px;
+      width: 100%;
+      text-align: center;
+    }
+    h1 { font-size: 2rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .subtitle { color: var(--text-secondary); margin-bottom: 2rem; }
+    .github-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      width: 100%;
+      padding: 0.875rem 1.5rem;
+      background: #ededed;
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    .github-btn:hover { background: #fff; }
+    .github-btn svg { width: 20px; height: 20px; }
+    .error-message {
+      background: rgba(248, 81, 73, 0.1);
+      border: 1px solid rgba(248, 81, 73, 0.3);
+      color: #f85149;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      font-size: 0.875rem;
+    }
+    .info-text {
+      margin-top: 2rem;
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+    }
+    .info-text a { color: var(--text); }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <a href="/">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>Skillmark</span>
+      </a>
+    </div>
+  </nav>
+  <div class="login-container">
+    <div class="login-box">
+      <h1>Sign in</h1>
+      <p class="subtitle">Get an API key to publish benchmark results</p>
+      ${errorMessage}
+      <a href="/auth/github" class="github-btn">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+        </svg>
+        Continue with GitHub
+      </a>
+      <p class="info-text">
+        By signing in, you agree to our <a href="/docs">Terms of Service</a>.
+      </p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+__name(renderLoginPage, "renderLoginPage");
+function renderDashboardPage(user) {
+  const keyRows = user.keys.map((key) => `
+    <tr data-key-id="${escapeHtml(key.id)}">
+      <td class="key-id">
+        <code>${escapeHtml(key.id.slice(0, 8))}...</code>
+      </td>
+      <td class="key-created">${key.createdAt ? formatRelativeTime(new Date(key.createdAt).getTime() / 1e3) : "Unknown"}</td>
+      <td class="key-used">${key.lastUsedAt ? formatRelativeTime(new Date(key.lastUsedAt).getTime() / 1e3) : "Never"}</td>
+      <td class="key-actions">
+        <button class="revoke-btn" onclick="revokeKey('${escapeHtml(key.id)}')">Revoke</button>
+      </td>
+    </tr>
+  `).join("");
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - Skillmark</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --bg: #000; --text: #ededed; --text-secondary: #888; --border: #333; --success: #3fb950; }
+    body {
+      font-family: 'Geist', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    nav { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); }
+    .nav-left { display: flex; align-items: center; gap: 0.5rem; }
+    .nav-left a { color: var(--text); text-decoration: none; display: flex; align-items: center; gap: 0.5rem; }
+    .nav-right { display: flex; align-items: center; gap: 1rem; }
+    .nav-right a { color: var(--text-secondary); text-decoration: none; font-size: 0.875rem; }
+    .nav-right a:hover { color: var(--text); }
+    .user-info { display: flex; align-items: center; gap: 0.5rem; }
+    .user-avatar { width: 28px; height: 28px; border-radius: 50%; }
+    .user-name { font-size: 0.875rem; }
+    .container { max-width: 800px; margin: 0 auto; padding: 3rem 1.5rem; }
+    h1 { font-size: 2rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .subtitle { color: var(--text-secondary); margin-bottom: 2rem; }
+    .section { margin-bottom: 3rem; }
+    .section h2 { font-size: 1rem; font-weight: 500; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); }
+    .generate-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.25rem;
+      background: var(--text);
+      color: var(--bg);
+      border: none;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      margin-bottom: 1.5rem;
+    }
+    .generate-btn:hover { background: #fff; }
+    .generate-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .new-key-display {
+      display: none;
+      background: rgba(63, 185, 80, 0.1);
+      border: 1px solid rgba(63, 185, 80, 0.3);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .new-key-display.visible { display: block; }
+    .new-key-display p { color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 0.75rem; }
+    .new-key-display .key-value {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: #0a0a0a;
+      padding: 0.75rem;
+      border-radius: 6px;
+      font-family: 'Geist Mono', monospace;
+      font-size: 0.8125rem;
+      word-break: break-all;
+    }
+    .copy-btn {
+      flex-shrink: 0;
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+    }
+    .copy-btn:hover { color: var(--text); border-color: var(--text-secondary); }
+    .done-btn {
+      flex-shrink: 0;
+      background: var(--success);
+      border: none;
+      color: #000;
+      padding: 0.25rem 0.75rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+    .done-btn:hover { opacity: 0.9; }
+    .keys-table { width: 100%; border-collapse: collapse; }
+    .keys-table th {
+      text-align: left;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-secondary);
+      font-weight: 500;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .keys-table td { padding: 1rem 0; border-bottom: 1px solid var(--border); }
+    .keys-table code { font-family: 'Geist Mono', monospace; font-size: 0.8125rem; }
+    .key-created, .key-used { color: var(--text-secondary); font-size: 0.875rem; }
+    .revoke-btn {
+      background: none;
+      border: 1px solid #f85149;
+      color: #f85149;
+      padding: 0.375rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.8125rem;
+      cursor: pointer;
+    }
+    .revoke-btn:hover { background: rgba(248, 81, 73, 0.1); }
+    .empty-state { color: var(--text-secondary); padding: 2rem 0; }
+    .usage-section { background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+    .usage-section h3 { font-size: 0.875rem; font-weight: 500; margin-bottom: 1rem; }
+    .usage-section pre { background: #000; border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; margin-bottom: 0.75rem; }
+    .usage-section code { font-family: 'Geist Mono', monospace; font-size: 0.8125rem; }
+    .usage-section p { color: var(--text-secondary); font-size: 0.8125rem; }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="nav-left">
+      <a href="/">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <span>Skillmark</span>
+      </a>
+    </div>
+    <div class="nav-right">
+      <div class="user-info">
+        ${user.avatar ? `<img src="${escapeHtml(user.avatar)}" alt="" class="user-avatar">` : ""}
+        <span class="user-name">${escapeHtml(user.username)}</span>
+      </div>
+      <a href="/auth/logout">Sign out</a>
+    </div>
+  </nav>
+  <div class="container">
+    <h1>Dashboard</h1>
+    <p class="subtitle">Manage your API keys for publishing benchmark results</p>
+
+    <div class="section">
+      <h2>API Keys</h2>
+      <button class="generate-btn" id="generateBtn" onclick="generateKey()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        Generate New Key
+      </button>
+
+      <div class="new-key-display" id="newKeyDisplay">
+        <p><strong>New API key created!</strong> Copy it now - you won't see it again.</p>
+        <div class="key-value">
+          <code id="newKeyValue"></code>
+          <button class="copy-btn" onclick="copyKey()">Copy</button>
+          <button class="done-btn" onclick="location.reload()">Done</button>
+        </div>
+      </div>
+
+      ${user.keys.length > 0 ? `
+      <table class="keys-table">
+        <thead>
+          <tr>
+            <th>Key ID</th>
+            <th>Created</th>
+            <th>Last Used</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="keysTableBody">
+          ${keyRows}
+        </tbody>
+      </table>
+      ` : `
+      <p class="empty-state">No API keys yet. Generate one to start publishing benchmarks.</p>
+      `}
+    </div>
+
+    <div class="section">
+      <h2>Usage</h2>
+      <div class="usage-section">
+        <h3>Save your API key</h3>
+        <pre><code># Option 1: Environment variable
+export SKILLMARK_API_KEY=sk_your_key_here
+
+# Option 2: Config file (~/.skillmarkrc)
+echo "api_key=sk_your_key_here" > ~/.skillmarkrc</code></pre>
+        <p>The CLI reads from env var first, then ~/.skillmarkrc.</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="usage-section">
+        <h3>Publish with auto-publish flag</h3>
+        <pre><code># Run benchmark and auto-publish results
+skillmark run ./my-skill --publish
+
+# Or publish existing results
+skillmark publish ./skillmark-results/result.json</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function generateKey() {
+      const btn = document.getElementById('generateBtn');
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+
+      try {
+        const res = await fetch('/auth/keys', { method: 'POST' });
+        const data = await res.json();
+
+        if (data.apiKey) {
+          document.getElementById('newKeyValue').textContent = data.apiKey;
+          document.getElementById('newKeyDisplay').classList.add('visible');
+          btn.style.display = 'none';
+        } else {
+          alert('Failed to generate key: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Failed to generate key: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg> Generate New Key';
+      }
+    }
+
+    function copyKey() {
+      const key = document.getElementById('newKeyValue').textContent;
+      navigator.clipboard.writeText(key).then(() => {
+        const btn = event.target;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 2000);
+      });
+    }
+
+    async function revokeKey(keyId) {
+      if (!confirm('Are you sure you want to revoke this API key? This cannot be undone.')) {
+        return;
+      }
+
+      try {
+        const res = await fetch('/auth/keys/' + keyId, { method: 'DELETE' });
+        const data = await res.json();
+
+        if (data.success) {
+          document.querySelector('tr[data-key-id="' + keyId + '"]').remove();
+        } else {
+          alert('Failed to revoke key: ' + (data.error || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Failed to revoke key: ' + err.message);
+      }
+    }
+  <\/script>
+</body>
+</html>`;
+}
+__name(renderDashboardPage, "renderDashboardPage");
+function formatRelativeTime(timestamp) {
+  if (!timestamp)
+    return "Never";
+  const now = Math.floor(Date.now() / 1e3);
+  const diff = now - timestamp;
+  if (diff < 60)
+    return "just now";
+  if (diff < 3600)
+    return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400)
+    return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 604800)
+    return `${Math.floor(diff / 86400)}d ago`;
+  if (diff < 2592e3)
+    return `${Math.floor(diff / 604800)}w ago`;
+  if (diff < 31536e3)
+    return `${Math.floor(diff / 2592e3)}mo ago`;
+  return `${Math.floor(diff / 31536e3)}y ago`;
+}
+__name(formatRelativeTime, "formatRelativeTime");
 function escapeHtml(str) {
   if (!str)
     return "";
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 __name(escapeHtml, "escapeHtml");
+
+// ../../node_modules/.pnpm/hono@4.11.7/node_modules/hono/dist/utils/cookie.js
+var validCookieNameRegEx = /^[\w!#$%&'*.^`|~+-]+$/;
+var validCookieValueRegEx = /^[ !#-:<-[\]-~]*$/;
+var parse = /* @__PURE__ */ __name((cookie, name) => {
+  if (name && cookie.indexOf(name) === -1) {
+    return {};
+  }
+  const pairs = cookie.trim().split(";");
+  const parsedCookie = {};
+  for (let pairStr of pairs) {
+    pairStr = pairStr.trim();
+    const valueStartPos = pairStr.indexOf("=");
+    if (valueStartPos === -1) {
+      continue;
+    }
+    const cookieName = pairStr.substring(0, valueStartPos).trim();
+    if (name && name !== cookieName || !validCookieNameRegEx.test(cookieName)) {
+      continue;
+    }
+    let cookieValue = pairStr.substring(valueStartPos + 1).trim();
+    if (cookieValue.startsWith('"') && cookieValue.endsWith('"')) {
+      cookieValue = cookieValue.slice(1, -1);
+    }
+    if (validCookieValueRegEx.test(cookieValue)) {
+      parsedCookie[cookieName] = cookieValue.indexOf("%") !== -1 ? tryDecode(cookieValue, decodeURIComponent_) : cookieValue;
+      if (name) {
+        break;
+      }
+    }
+  }
+  return parsedCookie;
+}, "parse");
+var _serialize = /* @__PURE__ */ __name((name, value, opt = {}) => {
+  let cookie = `${name}=${value}`;
+  if (name.startsWith("__Secure-") && !opt.secure) {
+    throw new Error("__Secure- Cookie must have Secure attributes");
+  }
+  if (name.startsWith("__Host-")) {
+    if (!opt.secure) {
+      throw new Error("__Host- Cookie must have Secure attributes");
+    }
+    if (opt.path !== "/") {
+      throw new Error('__Host- Cookie must have Path attributes with "/"');
+    }
+    if (opt.domain) {
+      throw new Error("__Host- Cookie must not have Domain attributes");
+    }
+  }
+  if (opt && typeof opt.maxAge === "number" && opt.maxAge >= 0) {
+    if (opt.maxAge > 3456e4) {
+      throw new Error(
+        "Cookies Max-Age SHOULD NOT be greater than 400 days (34560000 seconds) in duration."
+      );
+    }
+    cookie += `; Max-Age=${opt.maxAge | 0}`;
+  }
+  if (opt.domain && opt.prefix !== "host") {
+    cookie += `; Domain=${opt.domain}`;
+  }
+  if (opt.path) {
+    cookie += `; Path=${opt.path}`;
+  }
+  if (opt.expires) {
+    if (opt.expires.getTime() - Date.now() > 3456e7) {
+      throw new Error(
+        "Cookies Expires SHOULD NOT be greater than 400 days (34560000 seconds) in the future."
+      );
+    }
+    cookie += `; Expires=${opt.expires.toUTCString()}`;
+  }
+  if (opt.httpOnly) {
+    cookie += "; HttpOnly";
+  }
+  if (opt.secure) {
+    cookie += "; Secure";
+  }
+  if (opt.sameSite) {
+    cookie += `; SameSite=${opt.sameSite.charAt(0).toUpperCase() + opt.sameSite.slice(1)}`;
+  }
+  if (opt.priority) {
+    cookie += `; Priority=${opt.priority.charAt(0).toUpperCase() + opt.priority.slice(1)}`;
+  }
+  if (opt.partitioned) {
+    if (!opt.secure) {
+      throw new Error("Partitioned Cookie must have Secure attributes");
+    }
+    cookie += "; Partitioned";
+  }
+  return cookie;
+}, "_serialize");
+var serialize = /* @__PURE__ */ __name((name, value, opt) => {
+  value = encodeURIComponent(value);
+  return _serialize(name, value, opt);
+}, "serialize");
+
+// ../../node_modules/.pnpm/hono@4.11.7/node_modules/hono/dist/helper/cookie/index.js
+var getCookie = /* @__PURE__ */ __name((c, key, prefix) => {
+  const cookie = c.req.raw.headers.get("Cookie");
+  if (typeof key === "string") {
+    if (!cookie) {
+      return void 0;
+    }
+    let finalKey = key;
+    if (prefix === "secure") {
+      finalKey = "__Secure-" + key;
+    } else if (prefix === "host") {
+      finalKey = "__Host-" + key;
+    }
+    const obj2 = parse(cookie, finalKey);
+    return obj2[finalKey];
+  }
+  if (!cookie) {
+    return {};
+  }
+  const obj = parse(cookie);
+  return obj;
+}, "getCookie");
+var generateCookie = /* @__PURE__ */ __name((name, value, opt) => {
+  let cookie;
+  if (opt?.prefix === "secure") {
+    cookie = serialize("__Secure-" + name, value, { path: "/", ...opt, secure: true });
+  } else if (opt?.prefix === "host") {
+    cookie = serialize("__Host-" + name, value, {
+      ...opt,
+      path: "/",
+      secure: true,
+      domain: void 0
+    });
+  } else {
+    cookie = serialize(name, value, { path: "/", ...opt });
+  }
+  return cookie;
+}, "generateCookie");
+var setCookie = /* @__PURE__ */ __name((c, name, value, opt) => {
+  const cookie = generateCookie(name, value, opt);
+  c.header("Set-Cookie", cookie, { append: true });
+}, "setCookie");
+var deleteCookie = /* @__PURE__ */ __name((c, name, opt) => {
+  const deletedCookie = getCookie(c, name, opt?.prefix);
+  setCookie(c, name, "", { ...opt, maxAge: 0 });
+  return deletedCookie;
+}, "deleteCookie");
+
+// src/routes/github-oauth-authentication-handler.ts
+var authRouter = new Hono2();
+var GITHUB_OAUTH_URL = "https://github.com/login/oauth/authorize";
+var GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
+var GITHUB_USER_URL = "https://api.github.com/user";
+var SESSION_COOKIE = "skillmark_session";
+var SESSION_DURATION_DAYS = 30;
+authRouter.get("/github", (c) => {
+  const clientId = c.env.GITHUB_CLIENT_ID;
+  const baseUrl = getBaseUrl(c.req.url, c.env.ENVIRONMENT);
+  const redirectUri = `${baseUrl}/auth/github/callback`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: "read:user user:email",
+    state: generateState()
+  });
+  return c.redirect(`${GITHUB_OAUTH_URL}?${params.toString()}`);
+});
+authRouter.get("/github/callback", async (c) => {
+  const code = c.req.query("code");
+  const error = c.req.query("error");
+  if (error || !code) {
+    return c.redirect("/login?error=oauth_failed");
+  }
+  try {
+    const baseUrl = getBaseUrl(c.req.url, c.env.ENVIRONMENT);
+    const tokenResponse = await fetch(GITHUB_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({
+        client_id: c.env.GITHUB_CLIENT_ID,
+        client_secret: c.env.GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: `${baseUrl}/auth/github/callback`
+      })
+    });
+    const tokenData = await tokenResponse.json();
+    if (!tokenData.access_token) {
+      console.error("Failed to get access token:", tokenData);
+      return c.redirect("/login?error=token_failed");
+    }
+    const userResponse = await fetch(GITHUB_USER_URL, {
+      headers: {
+        "Authorization": `Bearer ${tokenData.access_token}`,
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "Skillmark-OAuth"
+      }
+    });
+    const githubUser = await userResponse.json();
+    const userId = await upsertUser(c.env.DB, githubUser);
+    const sessionId = await createSession(c.env.DB, userId);
+    setCookie(c, SESSION_COOKIE, sessionId, {
+      httpOnly: true,
+      secure: c.env.ENVIRONMENT === "production",
+      sameSite: "Lax",
+      maxAge: SESSION_DURATION_DAYS * 24 * 60 * 60,
+      path: "/"
+    });
+    return c.redirect("/dashboard");
+  } catch (err) {
+    console.error("OAuth callback error:", err);
+    return c.redirect("/login?error=oauth_failed");
+  }
+});
+authRouter.get("/logout", async (c) => {
+  const sessionId = getCookie(c, SESSION_COOKIE);
+  if (sessionId) {
+    await c.env.DB.prepare("DELETE FROM sessions WHERE id = ?").bind(sessionId).run();
+  }
+  deleteCookie(c, SESSION_COOKIE, { path: "/" });
+  return c.redirect("/");
+});
+authRouter.get("/me", async (c) => {
+  const user = await getCurrentUser2(c);
+  if (!user) {
+    return c.json({ error: "Not authenticated" }, 401);
+  }
+  return c.json({
+    id: user.id,
+    githubUsername: user.githubUsername,
+    githubAvatar: user.githubAvatar
+  });
+});
+authRouter.post("/keys", async (c) => {
+  const user = await getCurrentUser2(c);
+  if (!user) {
+    return c.json({ error: "Not authenticated" }, 401);
+  }
+  const apiKey = generateApiKey();
+  const keyHash = await hashApiKey2(apiKey);
+  const keyId = crypto.randomUUID();
+  await c.env.DB.prepare(`
+    INSERT INTO api_keys (id, key_hash, user_name, github_username, github_avatar, github_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(
+    keyId,
+    keyHash,
+    user.githubUsername,
+    user.githubUsername,
+    user.githubAvatar,
+    user.githubId
+  ).run();
+  return c.json({
+    apiKey,
+    keyId,
+    message: "API key generated. Store it securely - it cannot be retrieved again."
+  });
+});
+authRouter.get("/keys", async (c) => {
+  const user = await getCurrentUser2(c);
+  if (!user) {
+    return c.json({ error: "Not authenticated" }, 401);
+  }
+  const keys = await c.env.DB.prepare(`
+    SELECT id, created_at, last_used_at
+    FROM api_keys
+    WHERE github_id = ?
+    ORDER BY created_at DESC
+  `).bind(user.githubId).all();
+  const formattedKeys = keys.results?.map((key) => ({
+    id: key.id,
+    createdAt: key.created_at ? new Date(key.created_at * 1e3).toISOString() : null,
+    lastUsedAt: key.last_used_at ? new Date(key.last_used_at * 1e3).toISOString() : null
+  })) || [];
+  return c.json({ keys: formattedKeys });
+});
+authRouter.delete("/keys/:id", async (c) => {
+  const user = await getCurrentUser2(c);
+  if (!user) {
+    return c.json({ error: "Not authenticated" }, 401);
+  }
+  const keyId = c.req.param("id");
+  const key = await c.env.DB.prepare(`
+    SELECT id FROM api_keys WHERE id = ? AND github_id = ?
+  `).bind(keyId, user.githubId).first();
+  if (!key) {
+    return c.json({ error: "Key not found" }, 404);
+  }
+  await c.env.DB.prepare("DELETE FROM api_keys WHERE id = ?").bind(keyId).run();
+  return c.json({ success: true });
+});
+authRouter.post("/verify-key", async (c) => {
+  const authHeader = c.req.header("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    return c.json({ valid: false }, 401);
+  }
+  const apiKey = authHeader.slice(7);
+  const keyHash = await hashApiKey2(apiKey);
+  const keyRecord = await c.env.DB.prepare(`
+    SELECT github_username, github_avatar, github_id
+    FROM api_keys
+    WHERE key_hash = ?
+  `).bind(keyHash).first();
+  if (!keyRecord) {
+    return c.json({ valid: false }, 401);
+  }
+  await c.env.DB.prepare(`
+    UPDATE api_keys SET last_used_at = unixepoch() WHERE key_hash = ?
+  `).bind(keyHash).run();
+  return c.json({
+    valid: true,
+    user: {
+      githubUsername: keyRecord.github_username,
+      githubAvatar: keyRecord.github_avatar
+    }
+  });
+});
+async function getCurrentUser2(c) {
+  const cookieHeader = c.req.header("Cookie") || "";
+  const cookies = parseCookies(cookieHeader);
+  const sessionId = cookies[SESSION_COOKIE];
+  if (!sessionId) {
+    return null;
+  }
+  const session = await c.env.DB.prepare(`
+    SELECT u.id, u.github_id, u.github_username, u.github_avatar
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.id = ? AND s.expires_at > unixepoch()
+  `).bind(sessionId).first();
+  if (!session) {
+    return null;
+  }
+  return {
+    id: session.id,
+    githubId: session.github_id,
+    githubUsername: session.github_username,
+    githubAvatar: session.github_avatar
+  };
+}
+__name(getCurrentUser2, "getCurrentUser");
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  cookieHeader.split(";").forEach((cookie) => {
+    const [name, ...rest] = cookie.trim().split("=");
+    if (name) {
+      cookies[name] = rest.join("=");
+    }
+  });
+  return cookies;
+}
+__name(parseCookies, "parseCookies");
+async function upsertUser(db, githubUser) {
+  const existingUser = await db.prepare(`
+    SELECT id FROM users WHERE github_id = ?
+  `).bind(githubUser.id).first();
+  if (existingUser) {
+    await db.prepare(`
+      UPDATE users
+      SET github_username = ?, github_avatar = ?, github_email = ?, updated_at = unixepoch()
+      WHERE github_id = ?
+    `).bind(
+      githubUser.login,
+      githubUser.avatar_url,
+      githubUser.email,
+      githubUser.id
+    ).run();
+    return existingUser.id;
+  }
+  const userId = crypto.randomUUID();
+  await db.prepare(`
+    INSERT INTO users (id, github_id, github_username, github_avatar, github_email)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(
+    userId,
+    githubUser.id,
+    githubUser.login,
+    githubUser.avatar_url,
+    githubUser.email
+  ).run();
+  return userId;
+}
+__name(upsertUser, "upsertUser");
+async function createSession(db, userId) {
+  const sessionId = crypto.randomUUID();
+  const expiresAt = Math.floor(Date.now() / 1e3) + SESSION_DURATION_DAYS * 24 * 60 * 60;
+  await db.prepare(`
+    INSERT INTO sessions (id, user_id, expires_at)
+    VALUES (?, ?, ?)
+  `).bind(sessionId, userId, expiresAt).run();
+  return sessionId;
+}
+__name(createSession, "createSession");
+function generateApiKey() {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  return "sk_" + Array.from(array, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+__name(generateApiKey, "generateApiKey");
+async function hashApiKey2(apiKey) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(apiKey);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+__name(hashApiKey2, "hashApiKey");
+function generateState() {
+  const array = new Uint8Array(16);
+  crypto.getRandomValues(array);
+  return Array.from(array, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+__name(generateState, "generateState");
+function getBaseUrl(requestUrl, environment) {
+  const url = new URL(requestUrl);
+  if (environment === "production") {
+    return "https://skillmark.sh";
+  }
+  return `${url.protocol}//${url.host}`;
+}
+__name(getBaseUrl, "getBaseUrl");
+
+// src/routes/static-assets-handler.ts
+var assetsRouter = new Hono2();
+var FAVICON_BASE64 = "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";
+assetsRouter.get("/favicon.ico", (c) => {
+  const buffer = Uint8Array.from(atob(FAVICON_BASE64), (c2) => c2.charCodeAt(0));
+  return new Response(buffer, {
+    headers: {
+      "Content-Type": "image/png",
+      "Cache-Control": "public, max-age=31536000"
+    }
+  });
+});
+assetsRouter.get("/favicon.png", (c) => {
+  const buffer = Uint8Array.from(atob(FAVICON_BASE64), (c2) => c2.charCodeAt(0));
+  return new Response(buffer, {
+    headers: {
+      "Content-Type": "image/png",
+      "Cache-Control": "public, max-age=31536000"
+    }
+  });
+});
+assetsRouter.get("/og-image.png", async (c) => {
+  const svg = `<svg width="1200" height="630" xmlns="http://www.w3.org/2000/svg">
+    <rect width="100%" height="100%" fill="#0a0a0a"/>
+    <text x="100" y="150" font-family="monospace" font-size="72" font-weight="bold" fill="#fff">SKILLMARK</text>
+    <text x="100" y="210" font-family="monospace" font-size="24" fill="#888">THE AGENT SKILL BENCHMARKING PLATFORM</text>
+    <text x="100" y="320" font-family="sans-serif" font-size="36" fill="#ccc">Benchmark your AI agent skills with detailed</text>
+    <text x="100" y="370" font-family="sans-serif" font-size="36" fill="#ccc">metrics. Compare accuracy, token usage, and</text>
+    <text x="100" y="420" font-family="sans-serif" font-size="36" fill="#ccc">cost across models.</text>
+    <text x="100" y="540" font-family="monospace" font-size="20" fill="#666">$ npx skillmark run &lt;skill-path&gt;</text>
+  </svg>`;
+  return new Response(svg, {
+    headers: {
+      "Content-Type": "image/svg+xml",
+      "Cache-Control": "public, max-age=86400"
+    }
+  });
+});
 
 // src/worker-entry-point.ts
 var app = new Hono2();
@@ -3266,6 +4606,8 @@ app.use("*", async (c, next) => {
 app.get("/health", (c) => {
   return c.json({ status: "ok", timestamp: (/* @__PURE__ */ new Date()).toISOString() });
 });
+app.route("/", assetsRouter);
+app.route("/auth", authRouter);
 app.route("/api", apiRouter);
 app.route("/", pagesRouter);
 app.notFound((c) => {

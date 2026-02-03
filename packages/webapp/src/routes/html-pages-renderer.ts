@@ -30,6 +30,10 @@ interface LeaderboardRow {
  */
 pagesRouter.get('/', async (c) => {
   try {
+    // Get current user from session
+    const cookieHeader = c.req.header('Cookie') || '';
+    const currentUser = await getCurrentUser(c.env.DB, cookieHeader);
+
     // Get leaderboard with latest submitter info
     const results = await c.env.DB.prepare(`
       SELECT
@@ -50,7 +54,7 @@ pagesRouter.get('/', async (c) => {
 
     const entries = (results.results || []) as unknown as LeaderboardRow[];
 
-    return c.html(renderLeaderboardPage(entries));
+    return c.html(renderLeaderboardPage(entries, currentUser));
   } catch (error) {
     console.error('Error rendering leaderboard:', error);
     return c.html(renderErrorPage('Failed to load leaderboard'));
@@ -186,6 +190,12 @@ pagesRouter.get('/dashboard', async (c) => {
   }));
 });
 
+/** Current user info for nav */
+interface CurrentUser {
+  username: string;
+  avatar: string | null;
+}
+
 /**
  * Helper: Parse specific cookie from header
  */
@@ -201,9 +211,62 @@ function parseCookie(cookieHeader: string, name: string): string | null {
 }
 
 /**
+ * Helper: Get current user from session cookie
+ */
+async function getCurrentUser(db: D1Database, cookieHeader: string): Promise<CurrentUser | null> {
+  const sessionId = parseCookie(cookieHeader, 'skillmark_session');
+  if (!sessionId) return null;
+
+  const session = await db.prepare(`
+    SELECT u.github_username, u.github_avatar
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.id = ? AND s.expires_at > unixepoch()
+  `).bind(sessionId).first();
+
+  if (!session) return null;
+
+  return {
+    username: session.github_username as string,
+    avatar: session.github_avatar as string | null,
+  };
+}
+
+/**
+ * Helper: Render nav with optional user info
+ */
+function renderNav(currentUser: CurrentUser | null): string {
+  const userSection = currentUser
+    ? `<a href="/dashboard" class="user-nav">
+        <img src="${currentUser.avatar || `https://github.com/${currentUser.username}.png?size=32`}" alt="" class="user-avatar">
+        <span>@${escapeHtml(currentUser.username)}</span>
+      </a>`
+    : `<a href="/login">Login</a>`;
+
+  return `
+  <nav>
+    <div class="nav-left">
+      <a href="/" class="nav-home">
+        <svg class="nav-logo" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+        </svg>
+        <span class="nav-divider">/</span>
+        <span class="nav-title">Skillmark</span>
+      </a>
+    </div>
+    <div class="nav-right">
+      <a href="/docs">Docs</a>
+      <a href="/how-it-works">How It Works</a>
+      <a href="https://github.com/claudekit/skillmark" title="GitHub"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg></a>
+      ${userSection}
+    </div>
+  </nav>`;
+}
+
+/**
  * Render the leaderboard HTML page - Vercel/skills.sh style
  */
-function renderLeaderboardPage(entries: LeaderboardRow[]): string {
+function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUser | null = null): string {
   const totalRuns = entries.reduce((sum, e) => sum + e.totalRuns, 0);
 
   const rows = entries.map((entry, index) => {
@@ -244,6 +307,26 @@ function renderLeaderboardPage(entries: LeaderboardRow[]): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Skillmark - Agent Skill Benchmarks</title>
   <meta name="description" content="The open agent skill benchmarking platform. Test and compare AI agent skills with detailed metrics.">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/favicon.png">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://skillmark.sh/">
+  <meta property="og:title" content="Skillmark - Agent Skill Benchmarks">
+  <meta property="og:description" content="Benchmark your AI agent skills with detailed metrics. Compare accuracy, token usage, and cost across models.">
+  <meta property="og:image" content="https://cdn.claudekit.cc/skillmark/og-image.png">
+  <meta property="og:site_name" content="Skillmark">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:url" content="https://skillmark.sh/">
+  <meta name="twitter:title" content="Skillmark - Agent Skill Benchmarks">
+  <meta name="twitter:description" content="Benchmark your AI agent skills with detailed metrics. Compare accuracy, token usage, and cost across models.">
+  <meta name="twitter:image" content="https://cdn.claudekit.cc/skillmark/og-image.png">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -312,6 +395,25 @@ function renderLeaderboardPage(entries: LeaderboardRow[]): string {
 
     .nav-right a:hover {
       color: var(--text);
+    }
+
+    .user-nav {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .user-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+    }
+
+    .nav-home {
+      display: flex;
+      align-items: center;
+      text-decoration: none;
+      color: inherit;
     }
 
     /* Main container */
@@ -686,21 +788,7 @@ function renderLeaderboardPage(entries: LeaderboardRow[]): string {
   </style>
 </head>
 <body>
-  <nav>
-    <div class="nav-left">
-      <svg class="nav-logo" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-      </svg>
-      <span class="nav-divider">/</span>
-      <span class="nav-title">Skillmark</span>
-    </div>
-    <div class="nav-right">
-      <a href="/docs">Docs</a>
-      <a href="/how-it-works">How It Works</a>
-      <a href="https://github.com/claudekit/skillmark" title="GitHub"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg></a>
-      <a href="/login">Login</a>
-    </div>
-  </nav>
+  ${renderNav(currentUser)}
 
   <div class="container">
     <!-- Hero -->
@@ -829,6 +917,7 @@ function renderErrorPage(message: string): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Error - Skillmark</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -939,7 +1028,7 @@ Your question or task here.
       <h2>Options</h2>
       <table>
         <tr><td><code>--tests &lt;path&gt;</code></td><td>Path to test suite (default: ./tests)</td></tr>
-        <tr><td><code>--model &lt;model&gt;</code></td><td>haiku | sonnet | opus (default: sonnet)</td></tr>
+        <tr><td><code>--model &lt;model&gt;</code></td><td>haiku | sonnet | opus (default: opus)</td></tr>
         <tr><td><code>--runs &lt;n&gt;</code></td><td>Number of iterations (default: 3)</td></tr>
         <tr><td><code>--output &lt;dir&gt;</code></td><td>Output directory (default: ./skillmark-results)</td></tr>
         <tr><td><code>--publish</code></td><td>Auto-publish results to leaderboard</td></tr>
@@ -1055,6 +1144,7 @@ function renderDocLayout(title: string, content: string): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title} - Skillmark</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1172,6 +1262,7 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${escapeHtml(skill.skillName)} - Skillmark</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1326,6 +1417,7 @@ function renderLoginPage(error?: string): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Login - Skillmark</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1456,6 +1548,7 @@ function renderDashboardPage(user: DashboardUser): string {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dashboard - Skillmark</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1530,6 +1623,18 @@ function renderDashboardPage(user: DashboardUser): string {
       font-size: 0.75rem;
     }
     .copy-btn:hover { color: var(--text); border-color: var(--text-secondary); }
+    .done-btn {
+      flex-shrink: 0;
+      background: var(--success);
+      border: none;
+      color: #000;
+      padding: 0.25rem 0.75rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+    .done-btn:hover { opacity: 0.9; }
     .keys-table { width: 100%; border-collapse: collapse; }
     .keys-table th {
       text-align: left;
@@ -1592,8 +1697,9 @@ function renderDashboardPage(user: DashboardUser): string {
       <div class="new-key-display" id="newKeyDisplay">
         <p><strong>New API key created!</strong> Copy it now - you won't see it again.</p>
         <div class="key-value">
-          <span id="newKeyValue"></span>
+          <code id="newKeyValue"></code>
           <button class="copy-btn" onclick="copyKey()">Copy</button>
+          <button class="done-btn" onclick="location.reload()">Done</button>
         </div>
       </div>
 
@@ -1648,14 +1754,13 @@ skillmark publish ./skillmark-results/result.json</code></pre>
       btn.textContent = 'Generating...';
 
       try {
-        const res = await fetch('/api/keys', { method: 'POST' });
+        const res = await fetch('/auth/keys', { method: 'POST' });
         const data = await res.json();
 
         if (data.apiKey) {
           document.getElementById('newKeyValue').textContent = data.apiKey;
           document.getElementById('newKeyDisplay').classList.add('visible');
-          // Reload page to show new key in table
-          setTimeout(() => location.reload(), 100);
+          btn.style.display = 'none';
         } else {
           alert('Failed to generate key: ' + (data.error || 'Unknown error'));
         }
@@ -1682,7 +1787,7 @@ skillmark publish ./skillmark-results/result.json</code></pre>
       }
 
       try {
-        const res = await fetch('/api/keys/' + keyId, { method: 'DELETE' });
+        const res = await fetch('/auth/keys/' + keyId, { method: 'DELETE' });
         const data = await res.json();
 
         if (data.success) {

@@ -421,7 +421,7 @@ function generateState(): string {
 function getBaseUrl(requestUrl: string, environment: string): string {
   const url = new URL(requestUrl);
   if (environment === 'production') {
-    return 'https://skillmark.workers.dev';
+    return 'https://skillmark.sh';
   }
   return `${url.protocol}//${url.host}`;
 }

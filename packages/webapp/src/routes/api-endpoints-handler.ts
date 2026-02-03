@@ -111,7 +111,7 @@ apiRouter.post('/results', async (c) => {
     return c.json({
       success: true,
       resultId,
-      leaderboardUrl: `https://skillmark.workers.dev/?skill=${encodeURIComponent(payload.skillName)}`,
+      leaderboardUrl: `https://skillmark.sh/?skill=${encodeURIComponent(payload.skillName)}`,
       rank,
       submitter: keyInfo.githubUsername ? {
         github: keyInfo.githubUsername,

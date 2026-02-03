@@ -181,6 +181,44 @@ export async function discoverTests(skillPath) {
             continue;
         }
     }
-    return [];
+    // No tests found - auto-generate from SKILL.md
+    const skillMdPath = join(skillPath, 'SKILL.md');
+    try {
+        await stat(skillMdPath);
+        return generateTestsFromSkillMd(skillPath, skillMdPath);
+    }
+    catch {
+        return [];
+    }
+}
+/**
+ * Auto-generate tests from SKILL.md content
+ */
+async function generateTestsFromSkillMd(skillPath, skillMdPath) {
+    const content = await readFile(skillMdPath, 'utf-8');
+    // Extract skill name from frontmatter or first heading
+    const nameMatch = content.match(/^name:\s*(.+)$/m) || content.match(/^#\s+(.+)$/m);
+    const skillName = nameMatch?.[1]?.trim() || 'skill';
+    // Extract description
+    const descMatch = content.match(/^description:\s*(.+)$/m);
+    const description = descMatch?.[1]?.trim() || '';
+    // Generate a basic functional test
+    const tests = [
+        {
+            name: `${skillName}-basic-usage`,
+            type: 'task',
+            prompt: `Using the skill at ${skillPath}, demonstrate its basic functionality. ${description ? `The skill is described as: ${description}` : ''}`,
+            expected: [
+                'Skill activates correctly',
+                'Produces relevant output',
+                'No errors during execution',
+            ],
+            timeout: 120,
+            concepts: ['basic-usage'],
+            sourcePath: skillMdPath,
+        },
+    ];
+    console.log(`Auto-generated ${tests.length} test(s) from SKILL.md`);
+    return tests;
 }
 //# sourceMappingURL=markdown-test-definition-parser.js.map

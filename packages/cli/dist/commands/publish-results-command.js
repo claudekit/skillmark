@@ -1,12 +1,12 @@
 /**
  * Publish results command - uploads benchmark results to leaderboard API
  */
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { readFile, readdir } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
 import chalk from 'chalk';
 import ora from 'ora';
 /** Default API endpoint */
-const DEFAULT_ENDPOINT = 'https://skillmark.workers.dev/api';
+const DEFAULT_ENDPOINT = 'https://skillmark.sh/api';
 /**
  * Execute the publish command
  */
@@ -105,6 +105,129 @@ async function uploadResult(result, apiKey, endpoint) {
             hash: result.hash,
             timestamp: result.timestamp,
             rawJson: JSON.stringify(result),
+        }),
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`API error (${response.status}): ${errorText}`);
+    }
+    return response.json();
+}
+/**
+ * Publish results with auto-key (from run command with --publish flag)
+ * Includes test files and skill.sh link detection
+ */
+export async function publishResultsWithAutoKey(result, options) {
+    const spinner = ora();
+    try {
+        // 1. Validate result
+        spinner.start('Validating result...');
+        validateResult(result);
+        spinner.succeed('Result validated');
+        // 2. Load test files if path provided
+        let testFiles = [];
+        if (options.testsPath) {
+            spinner.start('Loading test files...');
+            testFiles = await loadTestFiles(options.testsPath);
+            spinner.succeed(`Loaded ${testFiles.length} test file(s)`);
+        }
+        // 3. Detect skill.sh link
+        const skillshLink = detectSkillshLink(result.skillSource);
+        // 4. Upload to API
+        spinner.start('Uploading to leaderboard...');
+        const endpoint = options.endpoint || DEFAULT_ENDPOINT;
+        const response = await uploadResultWithExtras(result, options.apiKey, endpoint, testFiles, skillshLink);
+        spinner.succeed('Uploaded successfully');
+        // 5. Display result
+        console.log(chalk.green('\n✓ Result published to leaderboard\n'));
+        console.log(`${chalk.gray('Skill:')}     ${result.skillName}`);
+        console.log(`${chalk.gray('Accuracy:')} ${result.aggregatedMetrics.accuracy.toFixed(1)}%`);
+        console.log(`${chalk.gray('Model:')}    ${result.model}`);
+        if (response.submitter?.github) {
+            console.log(`${chalk.gray('Submitter:')} @${response.submitter.github}`);
+        }
+        if (response.leaderboardUrl) {
+            console.log(`\n${chalk.blue('View leaderboard:')} ${response.leaderboardUrl}`);
+        }
+        if (response.rank) {
+            console.log(`${chalk.gray('Rank:')}     #${response.rank}`);
+        }
+    }
+    catch (error) {
+        spinner.fail('Publish failed');
+        throw error;
+    }
+}
+/**
+ * Load test files from directory
+ */
+async function loadTestFiles(testsPath) {
+    const fullPath = resolve(testsPath);
+    const files = [];
+    try {
+        const entries = await readdir(fullPath, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.isFile() && entry.name.endsWith('.md')) {
+                const filePath = join(fullPath, entry.name);
+                const content = await readFile(filePath, 'utf-8');
+                files.push({
+                    name: entry.name,
+                    content,
+                });
+            }
+        }
+    }
+    catch {
+        // Directory doesn't exist or can't be read, return empty
+    }
+    return files;
+}
+/**
+ * Detect if source is from skill.sh registry and return link
+ */
+function detectSkillshLink(source) {
+    // Check for skill.sh pattern: skill.sh/user/skill-name
+    const skillshMatch = source.match(/^skill\.sh\/([^/]+)\/([^/]+)$/i);
+    if (skillshMatch) {
+        return `https://skill.sh/${skillshMatch[1]}/${skillshMatch[2]}`;
+    }
+    // Check for full URL pattern
+    const urlMatch = source.match(/^https?:\/\/skill\.sh\/([^/]+)\/([^/]+)/i);
+    if (urlMatch) {
+        return `https://skill.sh/${urlMatch[1]}/${urlMatch[2]}`;
+    }
+    return null;
+}
+/**
+ * Upload result with test files and skill.sh link
+ */
+async function uploadResultWithExtras(result, apiKey, endpoint, testFiles, skillshLink) {
+    const url = `${endpoint}/results`;
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'X-Skillmark-Version': result.version,
+        },
+        body: JSON.stringify({
+            skillId: result.skillId,
+            skillName: result.skillName,
+            source: result.skillSource,
+            model: result.model,
+            accuracy: result.aggregatedMetrics.accuracy,
+            tokensTotal: result.aggregatedMetrics.tokensTotal,
+            tokensInput: result.aggregatedMetrics.tokensInput,
+            tokensOutput: result.aggregatedMetrics.tokensOutput,
+            durationMs: result.aggregatedMetrics.durationMs,
+            costUsd: result.aggregatedMetrics.costUsd,
+            toolCount: result.aggregatedMetrics.toolCount,
+            runs: result.runs,
+            hash: result.hash,
+            timestamp: result.timestamp,
+            rawJson: JSON.stringify(result),
+            testFiles: testFiles.length > 0 ? testFiles : undefined,
+            skillshLink: skillshLink || undefined,
         }),
     });
     if (!response.ok) {

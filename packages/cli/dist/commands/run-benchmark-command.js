@@ -26,9 +26,11 @@ export async function runBenchmark(skillSource, options) {
         spinner.start('Loading test definitions...');
         let tests;
         if (options.tests) {
+            // Use explicit tests path
             tests = await loadTestsFromDirectory(resolve(options.tests));
         }
         else {
+            // Auto-discover tests in skill directory
             tests = await discoverTests(skill.localPath);
         }
         if (tests.length === 0) {

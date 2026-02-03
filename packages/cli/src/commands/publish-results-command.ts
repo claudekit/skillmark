@@ -8,7 +8,7 @@ import ora from 'ora';
 import type { BenchmarkResult, PublishOptions } from '../types/index.js';
 
 /** Default API endpoint */
-const DEFAULT_ENDPOINT = 'https://skillmark.workers.dev/api';
+const DEFAULT_ENDPOINT = 'https://skillmark.sh/api';
 
 /** Test file structure for upload */
 interface TestFileUpload {

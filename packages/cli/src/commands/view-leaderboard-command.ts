@@ -6,7 +6,7 @@ import ora from 'ora';
 import type { LeaderboardEntry } from '../types/index.js';
 
 /** Default API endpoint */
-const DEFAULT_ENDPOINT = 'https://skillmark.workers.dev/api';
+const DEFAULT_ENDPOINT = 'https://skillmark.sh/api';
 
 /**
  * Execute the leaderboard command

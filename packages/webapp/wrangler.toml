@@ -8,7 +8,10 @@ database_name = "skillmark-db"
 database_id = "e1b45b94-f799-4e75-83f2-bebd777b040d"
 
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
+
+# Custom domain (configured via Cloudflare dashboard)
+# Domain: skillmark.sh
 
 # Required secrets (set via wrangler secret put):
 # - GITHUB_CLIENT_ID: GitHub OAuth App client ID
