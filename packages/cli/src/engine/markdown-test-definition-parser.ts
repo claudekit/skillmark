@@ -221,36 +221,133 @@ export async function discoverTests(skillPath: string): Promise<TestDefinition[]
 }
 
 /**
- * Auto-generate tests from SKILL.md content
+ * Spawn Claude CLI to generate tests (returns promise)
+ */
+async function spawnClaudeCli(prompt: string, cwd: string, timeout: number = 300000): Promise<string> {
+  const { spawn } = await import('node:child_process');
+
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-p', prompt,  // Print mode with prompt - non-interactive, exits after completion
+      '--dangerously-skip-permissions',  // Skip permission prompts
+      '--max-turns', '10',  // Limit agentic turns
+    ];
+
+    console.log('Spawning Claude CLI...');
+
+    const proc = spawn('claude', args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],  // ignore stdin to prevent hanging
+      timeout,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data: Buffer) => {
+      const chunk = data.toString();
+      stdout += chunk;
+      // Stream progress to console
+      process.stdout.write(chunk);
+    });
+
+    proc.stderr.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    proc.on('error', (error: Error) => {
+      reject(new Error(`Failed to spawn Claude CLI: ${error.message}`));
+    });
+
+    proc.on('close', (code: number) => {
+      if (code !== 0) {
+        reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
+      } else {
+        resolve(stdout);
+      }
+    });
+  });
+}
+
+/**
+ * Auto-generate tests from SKILL.md using Claude Code CLI
  */
 async function generateTestsFromSkillMd(skillPath: string, skillMdPath: string): Promise<TestDefinition[]> {
-  const content = await readFile(skillMdPath, 'utf-8');
+  const { mkdir } = await import('node:fs/promises');
 
-  // Extract skill name from frontmatter or first heading
+  const testsDir = join(skillPath, 'tests');
+
+  console.log('Generating tests using Claude Code CLI...');
+
+  // Create tests directory
+  await mkdir(testsDir, { recursive: true });
+
+  // Build prompt for Claude CLI
+  const prompt = `Read the skill at ${skillMdPath} and generate 3-5 comprehensive test files in ${testsDir}.
+
+IMPORTANT: Use the Write tool to create each test file directly.
+
+Use this EXACT test format for each .md file:
+---
+name: descriptive-test-name
+type: task
+concepts: [concept1, concept2]
+timeout: 120
+---
+
+# Prompt
+A specific question or task that tests a particular aspect of the skill.
+
+# Expected
+- [ ] First expected outcome or behavior
+- [ ] Second expected outcome or behavior
+- [ ] Third expected outcome (if applicable)
+
+Generate tests that cover:
+1. Basic usage - core functionality test
+2. Edge cases - unusual inputs or scenarios
+3. Error handling - invalid inputs, missing data
+4. Advanced scenarios - complex use cases
+
+Name files like: 01-basic-usage.md, 02-edge-cases.md, 03-error-handling.md
+
+After creating all test files, list what was created.`;
+
+  try {
+    // Spawn Claude CLI with proper flags
+    await spawnClaudeCli(prompt, skillPath, 300000);
+
+    console.log('\nClaude CLI completed. Loading generated tests...');
+
+    // Load the generated tests
+    const tests = await loadTestsFromDirectory(testsDir);
+
+    if (tests.length > 0) {
+      console.log(`Loaded ${tests.length} generated test(s)`);
+      return tests;
+    }
+  } catch (error) {
+    console.warn(`Claude CLI test generation failed: ${error}`);
+    console.log('Falling back to basic test generation...');
+  }
+
+  // Fallback: generate basic test from SKILL.md metadata
+  const content = await readFile(skillMdPath, 'utf-8');
   const nameMatch = content.match(/^name:\s*(.+)$/m) || content.match(/^#\s+(.+)$/m);
   const skillName = nameMatch?.[1]?.trim() || 'skill';
-
-  // Extract description
   const descMatch = content.match(/^description:\s*(.+)$/m);
-  const description = descMatch?.[1]?.trim() || '';
+  const desc = descMatch?.[1]?.trim() || '';
 
-  // Generate a basic functional test
-  const tests: TestDefinition[] = [
-    {
-      name: `${skillName}-basic-usage`,
-      type: 'task',
-      prompt: `Using the skill at ${skillPath}, demonstrate its basic functionality. ${description ? `The skill is described as: ${description}` : ''}`,
-      expected: [
-        'Skill activates correctly',
-        'Produces relevant output',
-        'No errors during execution',
-      ],
-      timeout: 120,
-      concepts: ['basic-usage'],
-      sourcePath: skillMdPath,
-    },
-  ];
+  const tests: TestDefinition[] = [{
+    name: `${skillName}-basic-usage`,
+    type: 'task',
+    prompt: `Activate and use the skill "${skillName}" at ${skillPath}. ${desc}`,
+    expected: ['Skill activates correctly', 'Produces relevant output', 'No errors'],
+    timeout: 120,
+    concepts: ['basic-usage'],
+    sourcePath: skillMdPath,
+  }];
 
-  console.log(`Auto-generated ${tests.length} test(s) from SKILL.md`);
+  console.log(`Generated ${tests.length} fallback test(s)`);
   return tests;
 }
