@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { TestDefinition, TranscriptEntry } from '../types/index.js';
+import { getStoredToken } from '../commands/auth-setup-and-token-storage-command.js';
 
 /** Result from executing a single test */
 export interface ExecutionResult {
@@ -113,10 +114,19 @@ async function runClaudeCli(
   cwd: string,
   timeoutMs: number
 ): Promise<{ stdout: string; stderr: string }> {
+  // Get stored OAuth token
+  const storedToken = await getStoredToken();
+
+  // Prepare environment with token if available
+  const env = { ...process.env };
+  if (storedToken) {
+    env.CLAUDE_CODE_OAUTH_TOKEN = storedToken;
+  }
+
   return new Promise((resolve, reject) => {
     const proc = spawn('claude', args, {
       cwd,
-      env: { ...process.env },
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],  // ignore stdin to prevent hanging
     });
 
@@ -146,7 +156,7 @@ async function runClaudeCli(
           if (result.is_error && result.result) {
             const errorMsg = result.result;
             if (errorMsg.includes('Invalid API key') || errorMsg.includes('/login')) {
-              reject(new Error(`Authentication required: ${errorMsg}. Run 'claude /login' to authenticate.`));
+              reject(new Error(`Authentication required. Run 'skillmark auth' to authenticate.`));
               return;
             }
             if (result.is_error) {

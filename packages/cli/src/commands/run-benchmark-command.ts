@@ -16,6 +16,7 @@ import { resolveSkillSource, formatSourceDisplay } from '../sources/unified-skil
 import { loadTestsFromDirectory, discoverTests } from '../engine/markdown-test-definition-parser.js';
 import { executeTest, cleanupTranscripts } from '../engine/claude-cli-executor.js';
 import { scoreResponse, aggregateMetrics } from '../engine/concept-accuracy-scorer.js';
+import { getStoredToken } from './auth-setup-and-token-storage-command.js';
 
 /** CLI version */
 const VERSION = '0.1.0';
@@ -23,12 +24,22 @@ const VERSION = '0.1.0';
 /**
  * Verify Claude CLI authentication before running benchmarks
  */
-async function verifyClaudeAuth(): Promise<{ ok: boolean; error?: string }> {
+async function verifyClaudeAuth(): Promise<{ ok: boolean; error?: string; token?: string }> {
   const { spawn } = await import('node:child_process');
 
+  // Get stored token (from env or config file)
+  const storedToken = await getStoredToken();
+
   return new Promise((resolve) => {
+    // Prepare environment with token if available
+    const env = { ...process.env };
+    if (storedToken) {
+      env.CLAUDE_CODE_OAUTH_TOKEN = storedToken;
+    }
+
     // Quick test with minimal prompt
     const proc = spawn('claude', ['-p', 'Say OK', '--output-format', 'json', '--model', 'haiku'], {
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 30000,
     });
@@ -48,16 +59,15 @@ async function verifyClaudeAuth(): Promise<{ ok: boolean; error?: string }> {
         if (result.is_error && result.result?.includes('Invalid API key')) {
           resolve({
             ok: false,
-            error: `Claude CLI non-interactive mode requires authentication.\n` +
-              `  Run: claude setup-token\n` +
-              `  Or set ANTHROPIC_API_KEY environment variable.\n` +
-              `  Note: Interactive 'claude' works, but skillmark uses non-interactive '-p' mode.`,
+            error: `Claude CLI not authenticated.\n` +
+              `  Run: skillmark auth\n` +
+              `  Or set CLAUDE_CODE_OAUTH_TOKEN environment variable.`,
           });
           return;
         }
-        resolve({ ok: true });
+        resolve({ ok: true, token: storedToken });
       } catch {
-        resolve({ ok: true }); // Assume ok if we can't parse
+        resolve({ ok: true, token: storedToken }); // Assume ok if we can't parse
       }
     });
 

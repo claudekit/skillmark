@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { getStoredToken } from '../commands/auth-setup-and-token-storage-command.js';
 /** Model name mapping for Claude CLI */
 const MODEL_MAP = {
     haiku: 'claude-3-5-haiku-latest',
@@ -70,10 +71,17 @@ export async function executeTest(test, skillPath, model, workDir) {
  * Run Claude CLI as a subprocess
  */
 async function runClaudeCli(args, cwd, timeoutMs) {
+    // Get stored OAuth token
+    const storedToken = await getStoredToken();
+    // Prepare environment with token if available
+    const env = { ...process.env };
+    if (storedToken) {
+        env.CLAUDE_CODE_OAUTH_TOKEN = storedToken;
+    }
     return new Promise((resolve, reject) => {
         const proc = spawn('claude', args, {
             cwd,
-            env: { ...process.env },
+            env,
             stdio: ['ignore', 'pipe', 'pipe'], // ignore stdin to prevent hanging
         });
         let stdout = '';
@@ -97,7 +105,7 @@ async function runClaudeCli(args, cwd, timeoutMs) {
                     if (result.is_error && result.result) {
                         const errorMsg = result.result;
                         if (errorMsg.includes('Invalid API key') || errorMsg.includes('/login')) {
-                            reject(new Error(`Authentication required: ${errorMsg}. Run 'claude /login' to authenticate.`));
+                            reject(new Error(`Authentication required. Run 'skillmark auth' to authenticate.`));
                             return;
                         }
                         if (result.is_error) {

@@ -13,6 +13,7 @@ import { runBenchmark } from './commands/run-benchmark-command.js';
 import { publishResults, publishResultsWithAutoKey } from './commands/publish-results-command.js';
 import { viewLeaderboard } from './commands/view-leaderboard-command.js';
 import { readApiKeyConfig, getConfigSourceDescription } from './config/api-key-config-reader.js';
+import { runAuth, showAuthStatus } from './commands/auth-setup-and-token-storage-command.js';
 
 const VERSION = '0.1.0';
 
@@ -136,10 +137,28 @@ program
     }
   });
 
-// Auth command - save API key
+// Auth command - setup Claude CLI OAuth token (required for running benchmarks)
 program
   .command('auth')
-  .description('Save API key to ~/.skillmarkrc')
+  .description('Setup Claude CLI authentication (required for running benchmarks)')
+  .option('-s, --status', 'Check authentication status')
+  .action(async (options) => {
+    try {
+      if (options.status) {
+        await showAuthStatus();
+      } else {
+        await runAuth();
+      }
+    } catch (error) {
+      console.error(chalk.red(`Error: ${error instanceof Error ? error.message : error}`));
+      process.exit(1);
+    }
+  });
+
+// Login command - save Skillmark API key (for publishing results)
+program
+  .command('login')
+  .description('Save Skillmark API key to ~/.skillmarkrc (for publishing)')
   .argument('<api-key>', 'Your Skillmark API key (get it at https://skillmark.sh/login)')
   .action(async (apiKey: string) => {
     const { writeFile } = await import('node:fs/promises');
