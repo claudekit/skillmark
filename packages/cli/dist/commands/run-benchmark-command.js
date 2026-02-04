@@ -125,11 +125,23 @@ export async function runBenchmark(skillSource, options) {
                 else {
                     spinner.start(`Testing: ${test.name}`);
                 }
+                // Elapsed timer for verbose mode (declared outside try for catch access)
+                let elapsedTimer = null;
                 try {
                     if (verbose) {
-                        console.log(chalk.gray(`  Invoking Claude CLI...`));
+                        const cliStart = Date.now();
+                        process.stdout.write(chalk.gray(`  Invoking Claude CLI... 0s`));
+                        elapsedTimer = setInterval(() => {
+                            const elapsed = Math.floor((Date.now() - cliStart) / 1000);
+                            process.stdout.write(`\r${chalk.gray(`  Invoking Claude CLI... ${elapsed}s`)}`);
+                        }, 1000);
                     }
                     const execution = await executeTest(test, skill.localPath, options.model, workDir);
+                    // Clear elapsed timer
+                    if (elapsedTimer) {
+                        clearInterval(elapsedTimer);
+                        process.stdout.write('\n');
+                    }
                     if (!execution.success) {
                         if (verbose) {
                             console.log(chalk.red(`  ✗ Failed: ${execution.error}`));
@@ -179,6 +191,11 @@ export async function runBenchmark(skillSource, options) {
                     }
                 }
                 catch (error) {
+                    // Clear elapsed timer on error
+                    if (elapsedTimer) {
+                        clearInterval(elapsedTimer);
+                        process.stdout.write('\n');
+                    }
                     if (verbose) {
                         console.log(chalk.red(`  ✗ Error: ${error instanceof Error ? error.message : 'Unknown error'}`));
                     }
