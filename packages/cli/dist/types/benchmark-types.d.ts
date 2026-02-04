@@ -98,6 +98,8 @@ export interface RunOptions {
     runs: number;
     /** Output directory */
     output: string;
+    /** Show verbose progress output */
+    verbose?: boolean;
 }
 /** CLI publish command options */
 export interface PublishOptions {

@@ -31,6 +31,7 @@ program
     .option('-p, --publish', 'Auto-publish results after benchmark completes')
     .option('-k, --api-key <key>', 'API key for publishing (or use config/env)')
     .option('-e, --endpoint <url>', 'API endpoint URL for publishing')
+    .option('-v, --verbose', 'Show detailed progress for each test step')
     .action(async (skillSource, options) => {
     try {
         // Validate model
@@ -52,6 +53,7 @@ program
             model: model,
             runs,
             output: options.output,
+            verbose: options.verbose,
         });
         // Auto-publish if requested
         if (options.publish) {
