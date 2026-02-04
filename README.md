@@ -201,6 +201,25 @@ skillmark/
 └── README.md
 ```
 
+## Documentation
+
+Complete documentation is available in the [`docs/`](./docs/) directory:
+
+- **[Project Overview & PDR](./docs/project-overview-pdr.md)** - Goals, requirements, and success criteria
+- **[Codebase Summary](./docs/codebase-summary.md)** - Directory structure and key modules
+- **[Code Standards](./docs/code-standards.md)** - TypeScript conventions and best practices
+- **[System Architecture](./docs/system-architecture.md)** - Architecture diagrams and data flow
+- **[Project Roadmap](./docs/project-roadmap.md)** - Phases, milestones, and timeline
+- **[Deployment Guide](./docs/deployment-guide.md)** - CLI npm publishing and Cloudflare deployment
+
+## Contributing
+
+Contributions welcome! Please:
+1. Read [Code Standards](./docs/code-standards.md)
+2. Follow the [Development Rules](https://github.com/claudekit/skillmark/blob/main/.claude/workflows/development-rules.md)
+3. Ensure tests pass: `pnpm test`
+4. Run linting: `pnpm lint`
+
 ## License
 
 MIT
