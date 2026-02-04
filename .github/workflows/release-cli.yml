@@ -2,10 +2,9 @@ name: Release CLI
 
 on:
   push:
-    branches: [main, dev]
-    paths:
-      - 'packages/cli/**'
-      - 'pnpm-lock.yaml'
+    branches: [main]
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
   release:
@@ -29,21 +28,15 @@ jobs:
       - name: Build CLI
         run: pnpm --filter @skillmark/cli build
 
-      - name: Set beta version
-        if: github.ref == 'refs/heads/dev'
-        working-directory: packages/cli
-        run: npm version prerelease --preid=beta --no-git-tag-version
-
-      - name: Publish (official)
-        if: github.ref == 'refs/heads/main'
-        working-directory: packages/cli
-        run: npm publish --access public
+      - name: Create Release Pull Request or Publish
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          publish: pnpm release
+          version: pnpm version
+          title: 'chore: version packages'
+          commit: 'chore: version packages'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish (beta)
-        if: github.ref == 'refs/heads/dev'
-        working-directory: packages/cli
-        run: npm publish --access public --tag beta
-        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

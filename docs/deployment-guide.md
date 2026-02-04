@@ -49,21 +49,47 @@ export CF_ACCOUNT_ID=<your-cloudflare-account-id>
 
 ## Part 1: CLI Package Deployment (@skillmark/cli)
 
-### Step 1: Prepare Release
+### Automated Release with Changesets
+
+The CLI uses [Changesets](https://github.com/changesets/changesets) for version management and automated publishing.
+
+#### Step 1: Create a Changeset (Before PR)
 
 ```bash
-# Switch to working directory
-cd /Users/duynguyen/www/claudekit/skillmark
+# When making changes that should be released
+pnpm changeset
 
-# Update version in package.json
-npm version minor  # or major/patch as appropriate
-# This automatically commits and tags the version
+# Interactive prompts:
+# 1. Select packages: @skillmark/cli
+# 2. Choose bump type: patch | minor | major
+# 3. Write summary of changes
 
-# Or manually:
-# 1. Edit packages/cli/package.json - increment version
-# 2. Run: git add . && git commit -m "chore: release v0.2.0"
-# 3. Run: git tag v0.2.0
+# This creates a .changeset/<random-id>.md file
+# Commit this file with your PR
 ```
+
+#### Step 2: Merge to Main
+
+When your PR merges to `main`:
+1. GitHub Action detects changeset files
+2. Creates a "Version Packages" PR automatically
+3. This PR bumps `package.json` version and updates `CHANGELOG.md`
+
+#### Step 3: Publish Release
+
+When you merge the "Version Packages" PR:
+1. GitHub Action publishes to npm automatically
+2. Creates git tags for the release
+
+#### Changeset Bump Types
+
+| Type | When to Use | Example |
+|------|-------------|---------|
+| `patch` | Bug fixes, docs | 0.1.0 → 0.1.1 |
+| `minor` | New features (backward compatible) | 0.1.0 → 0.2.0 |
+| `major` | Breaking changes | 0.1.0 → 1.0.0 |
+
+### Manual Release (Legacy)
 
 ### Step 2: Build CLI Package
 
@@ -434,7 +460,46 @@ wrangler d1 backup restore skillmark-db <backup-id>
 
 ## Part 4: CI/CD Setup
 
-### GitHub Actions Workflow
+### Current Workflows
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `test-cli.yml` | Push to main/dev, PRs to dev | Lint, build, test |
+| `release-cli.yml` | Push to main | Version packages + publish to npm |
+| `deploy-webapp.yml` | Push to main | Deploy webapp to Cloudflare |
+
+### CLI Release Workflow (release-cli.yml)
+
+Uses [changesets/action](https://github.com/changesets/action):
+
+```yaml
+name: Release CLI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          registry-url: 'https://registry.npmjs.org'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @skillmark/cli build
+      - uses: changesets/action@v1
+        with:
+          publish: pnpm release
+          version: pnpm version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+
+### Legacy Workflow Reference
 
 Create `.github/workflows/deploy.yml`:
 
