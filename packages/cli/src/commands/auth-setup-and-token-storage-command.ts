@@ -114,8 +114,10 @@ async function runSetupToken(): Promise<string | null> {
       }
 
       // Extract token from output
-      // Format: "sk-ant-oat01-..." on its own line
-      const tokenMatch = stdout.match(/sk-ant-oat01-[A-Za-z0-9_-]+/);
+      // Token may span multiple lines due to terminal wrapping
+      // Remove all whitespace/newlines from output before matching
+      const cleanedOutput = stdout.replace(/[\s\n\r]+/g, ' ');
+      const tokenMatch = cleanedOutput.match(/sk-ant-oat01-[A-Za-z0-9_-]+/);
       if (tokenMatch) {
         resolve(tokenMatch[0]);
       } else {
