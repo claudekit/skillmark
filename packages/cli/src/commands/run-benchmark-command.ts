@@ -59,8 +59,9 @@ export async function runBenchmark(
     await mkdir(outputDir, { recursive: true });
 
     // 4. Run benchmarks
+    const verbose = options.verbose ?? false;
     console.log(
-      chalk.blue(`\nRunning ${tests.length} test(s) × ${options.runs} run(s) with ${options.model}\n`)
+      chalk.blue(`\nRunning ${tests.length} test(s) × ${options.runs} run(s) with ${options.model}${verbose ? ' (verbose)' : ''}\n`)
     );
 
     const allResults: TestResult[] = [];
@@ -70,14 +71,34 @@ export async function runBenchmark(
       console.log(chalk.gray(`── Run ${run}/${options.runs} ──`));
 
       for (const test of tests) {
-        spinner.start(`Testing: ${test.name}`);
+        const testStart = Date.now();
+        if (verbose) {
+          console.log(chalk.cyan(`\n▶ Starting: ${test.name}`));
+          console.log(chalk.gray(`  Type: ${test.type} | Timeout: ${test.timeout}s | Concepts: ${test.concepts.length}`));
+        } else {
+          spinner.start(`Testing: ${test.name}`);
+        }
 
         try {
+          if (verbose) {
+            console.log(chalk.gray(`  Invoking Claude CLI...`));
+          }
+
           const execution = await executeTest(test, skill.localPath, options.model, workDir);
 
           if (!execution.success) {
-            spinner.fail(`${test.name}: ${execution.error}`);
+            if (verbose) {
+              console.log(chalk.red(`  ✗ Failed: ${execution.error}`));
+            } else {
+              spinner.fail(`${test.name}: ${execution.error}`);
+            }
             continue;
+          }
+
+          if (verbose) {
+            const elapsed = ((Date.now() - testStart) / 1000).toFixed(1);
+            console.log(chalk.gray(`  Execution complete (${elapsed}s)`));
+            console.log(chalk.gray(`  Tokens: ${execution.inputTokens + execution.outputTokens} | Tools: ${execution.toolCount} | Cost: $${execution.costUsd.toFixed(4)}`));
           }
 
           // Calculate metrics
@@ -98,16 +119,32 @@ export async function runBenchmark(
           // Display result
           const status = result.passed ? chalk.green('✓') : chalk.yellow('○');
           const accuracy = result.metrics.accuracy.toFixed(1);
-          spinner.succeed(
-            `${status} ${test.name}: ${accuracy}% (${result.matchedConcepts.length}/${test.concepts.length} concepts)`
-          );
 
-          // Show missed concepts if any
-          if (result.missedConcepts.length > 0 && result.missedConcepts.length <= 3) {
-            console.log(chalk.gray(`   Missed: ${result.missedConcepts.join(', ')}`));
+          if (verbose) {
+            console.log(chalk.gray(`  Scoring response...`));
+            console.log(`  ${status} Result: ${accuracy}% accuracy (${result.matchedConcepts.length}/${test.concepts.length} concepts)`);
+            if (result.matchedConcepts.length > 0) {
+              console.log(chalk.green(`  Matched: ${result.matchedConcepts.join(', ')}`));
+            }
+            if (result.missedConcepts.length > 0) {
+              console.log(chalk.yellow(`  Missed: ${result.missedConcepts.join(', ')}`));
+            }
+          } else {
+            spinner.succeed(
+              `${status} ${test.name}: ${accuracy}% (${result.matchedConcepts.length}/${test.concepts.length} concepts)`
+            );
+
+            // Show missed concepts if any
+            if (result.missedConcepts.length > 0 && result.missedConcepts.length <= 3) {
+              console.log(chalk.gray(`   Missed: ${result.missedConcepts.join(', ')}`));
+            }
           }
         } catch (error) {
-          spinner.fail(`${test.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          if (verbose) {
+            console.log(chalk.red(`  ✗ Error: ${error instanceof Error ? error.message : 'Unknown error'}`));
+          } else {
+            spinner.fail(`${test.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          }
         }
       }
     }
