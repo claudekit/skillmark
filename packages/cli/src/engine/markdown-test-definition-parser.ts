@@ -11,6 +11,7 @@ import matter from 'gray-matter';
 import type { TestDefinition } from '../types/index.js';
 import { SkillContentCollector } from './skill-content-collector.js';
 import { withRetry } from './retry-with-degrade-utils.js';
+import { getStoredToken } from '../commands/auth-setup-and-token-storage-command.js';
 import {
   ensureSkillCreatorInstalled,
   invokeSkillCreator,
@@ -308,6 +309,13 @@ async function invokeClaudeCliWithJson(
 ): Promise<GeneratedTest[] | null> {
   const { spawn } = await import('node:child_process');
 
+  // Get stored OAuth token
+  const storedToken = await getStoredToken();
+  const env = { ...process.env };
+  if (storedToken) {
+    env.CLAUDE_CODE_OAUTH_TOKEN = storedToken;
+  }
+
   return new Promise((resolve) => {
     const args = [
       '-p', prompt,
@@ -319,6 +327,7 @@ async function invokeClaudeCliWithJson(
     console.log(`Invoking Claude CLI (${model})...`);
 
     const proc = spawn('claude', args, {
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

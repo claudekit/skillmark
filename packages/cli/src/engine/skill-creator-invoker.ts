@@ -11,6 +11,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { getStoredToken } from '../commands/auth-setup-and-token-storage-command.js';
 
 const execAsync = promisify(exec);
 
@@ -163,6 +164,13 @@ export async function invokeSkillCreator(
 ): Promise<SkillAnalysis | null> {
   const prompt = buildAnalysisPrompt(skillPath);
 
+  // Get stored OAuth token
+  const storedToken = await getStoredToken();
+  const env = { ...process.env };
+  if (storedToken) {
+    env.CLAUDE_CODE_OAUTH_TOKEN = storedToken;
+  }
+
   return new Promise((resolve) => {
     const args = [
       '-p',
@@ -179,6 +187,7 @@ export async function invokeSkillCreator(
     console.log('Invoking skill-creator for skill analysis...');
 
     const proc = spawn('claude', args, {
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

@@ -10,6 +10,7 @@ import { join, extname } from 'node:path';
 import matter from 'gray-matter';
 import { SkillContentCollector } from './skill-content-collector.js';
 import { withRetry } from './retry-with-degrade-utils.js';
+import { getStoredToken } from '../commands/auth-setup-and-token-storage-command.js';
 import { ensureSkillCreatorInstalled, invokeSkillCreator, } from './skill-creator-invoker.js';
 import { buildEnhancedTestPrompt } from './enhanced-test-prompt-builder.js';
 /** Default values for test definitions */
@@ -248,6 +249,12 @@ function extractJsonFromResponse(text) {
  */
 async function invokeClaudeCliWithJson(prompt, model = 'sonnet', timeoutMs = 180000) {
     const { spawn } = await import('node:child_process');
+    // Get stored OAuth token
+    const storedToken = await getStoredToken();
+    const env = { ...process.env };
+    if (storedToken) {
+        env.CLAUDE_CODE_OAUTH_TOKEN = storedToken;
+    }
     return new Promise((resolve) => {
         const args = [
             '-p', prompt,
@@ -257,6 +264,7 @@ async function invokeClaudeCliWithJson(prompt, model = 'sonnet', timeoutMs = 180
         ];
         console.log(`Invoking Claude CLI (${model})...`);
         const proc = spawn('claude', args, {
+            env,
             stdio: ['ignore', 'pipe', 'pipe'],
         });
         let stdout = '';

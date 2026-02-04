@@ -10,7 +10,7 @@ import { resolveSkillSource, formatSourceDisplay } from '../sources/unified-skil
 import { loadTestsFromDirectory, discoverTests } from '../engine/markdown-test-definition-parser.js';
 import { executeTest, cleanupTranscripts } from '../engine/claude-cli-executor.js';
 import { scoreResponse, aggregateMetrics } from '../engine/concept-accuracy-scorer.js';
-import { getStoredToken } from './auth-setup-and-token-storage-command.js';
+import { getStoredToken, runAuth } from './auth-setup-and-token-storage-command.js';
 /** CLI version */
 const VERSION = '0.1.0';
 /**
@@ -71,10 +71,19 @@ export async function runBenchmark(skillSource, options) {
     try {
         // 0. Verify Claude CLI authentication
         spinner.start('Verifying Claude CLI authentication...');
-        const authCheck = await verifyClaudeAuth();
+        let authCheck = await verifyClaudeAuth();
         if (!authCheck.ok) {
-            spinner.fail('Authentication failed');
-            throw new Error(authCheck.error);
+            spinner.warn('Not authenticated - starting auth setup...');
+            console.log('');
+            await runAuth();
+            console.log('');
+            // Verify again after auth
+            spinner.start('Verifying authentication...');
+            authCheck = await verifyClaudeAuth();
+            if (!authCheck.ok) {
+                spinner.fail('Authentication still failed');
+                throw new Error(authCheck.error);
+            }
         }
         spinner.succeed('Claude CLI authenticated');
         // 1. Resolve skill source
