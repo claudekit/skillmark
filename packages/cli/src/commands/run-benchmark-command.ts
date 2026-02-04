@@ -21,6 +21,51 @@ import { scoreResponse, aggregateMetrics } from '../engine/concept-accuracy-scor
 const VERSION = '0.1.0';
 
 /**
+ * Verify Claude CLI authentication before running benchmarks
+ */
+async function verifyClaudeAuth(): Promise<{ ok: boolean; error?: string }> {
+  const { spawn } = await import('node:child_process');
+
+  return new Promise((resolve) => {
+    // Quick test with minimal prompt
+    const proc = spawn('claude', ['-p', 'Say OK', '--output-format', 'json', '--model', 'haiku'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30000,
+    });
+
+    let stdout = '';
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+
+    const timeout = setTimeout(() => {
+      proc.kill();
+      resolve({ ok: false, error: 'Authentication check timed out' });
+    }, 30000);
+
+    proc.on('close', () => {
+      clearTimeout(timeout);
+      try {
+        const result = JSON.parse(stdout);
+        if (result.is_error && result.result?.includes('Invalid API key')) {
+          resolve({
+            ok: false,
+            error: `Claude CLI not authenticated. Run 'claude setup-token' or 'claude /login' to authenticate.`,
+          });
+          return;
+        }
+        resolve({ ok: true });
+      } catch {
+        resolve({ ok: true }); // Assume ok if we can't parse
+      }
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timeout);
+      resolve({ ok: false, error: `Claude CLI not found: ${err.message}` });
+    });
+  });
+}
+
+/**
  * Execute the run command
  */
 export async function runBenchmark(
@@ -30,6 +75,15 @@ export async function runBenchmark(
   const spinner = ora();
 
   try {
+    // 0. Verify Claude CLI authentication
+    spinner.start('Verifying Claude CLI authentication...');
+    const authCheck = await verifyClaudeAuth();
+    if (!authCheck.ok) {
+      spinner.fail('Authentication failed');
+      throw new Error(authCheck.error);
+    }
+    spinner.succeed('Claude CLI authenticated');
+
     // 1. Resolve skill source
     spinner.start('Resolving skill source...');
     const skill = await resolveSkillSource(skillSource);

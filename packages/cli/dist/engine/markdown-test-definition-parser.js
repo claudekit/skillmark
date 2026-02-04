@@ -279,8 +279,29 @@ async function invokeClaudeCliWithJson(prompt, model = 'sonnet', timeoutMs = 180
         });
         proc.on('close', (code) => {
             clearTimeout(timeout);
+            // First try to parse stdout for error details (Claude CLI returns errors in JSON)
+            if (stdout) {
+                try {
+                    const parsed = JSON.parse(stdout);
+                    if (parsed.is_error && parsed.result) {
+                        const errorMsg = parsed.result;
+                        if (errorMsg.includes('Invalid API key') || errorMsg.includes('/login')) {
+                            console.warn(`Authentication required: ${errorMsg}. Run 'claude /login' to authenticate.`);
+                        }
+                        else {
+                            console.warn(`Claude CLI error: ${errorMsg}`);
+                        }
+                        resolve(null);
+                        return;
+                    }
+                }
+                catch {
+                    // Not JSON, continue
+                }
+            }
             if (code !== 0) {
-                console.warn(`Claude CLI exited with code ${code}: ${stderr}`);
+                const errorDetail = stderr || stdout.slice(0, 200) || 'No error details';
+                console.warn(`Claude CLI exited with code ${code}: ${errorDetail}`);
                 resolve(null);
                 return;
             }

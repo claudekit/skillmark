@@ -90,11 +90,33 @@ async function runClaudeCli(args, cwd, timeoutMs) {
         }, timeoutMs);
         proc.on('close', (code) => {
             clearTimeout(timeout);
+            // Check for auth errors in JSON response (Claude CLI returns error in JSON, not stderr)
+            if (stdout) {
+                try {
+                    const result = JSON.parse(stdout);
+                    if (result.is_error && result.result) {
+                        const errorMsg = result.result;
+                        if (errorMsg.includes('Invalid API key') || errorMsg.includes('/login')) {
+                            reject(new Error(`Authentication required: ${errorMsg}. Run 'claude /login' to authenticate.`));
+                            return;
+                        }
+                        if (result.is_error) {
+                            reject(new Error(`Claude CLI error: ${errorMsg}`));
+                            return;
+                        }
+                    }
+                }
+                catch {
+                    // Not JSON, continue with normal handling
+                }
+            }
             if (code === 0) {
                 resolve({ stdout, stderr });
             }
             else {
-                reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
+                // Include stdout in error for better diagnostics when stderr is empty
+                const errorDetail = stderr || stdout.slice(0, 200) || 'No error details';
+                reject(new Error(`Claude CLI exited with code ${code}: ${errorDetail}`));
             }
         });
         proc.on('error', (err) => {

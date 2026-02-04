@@ -208,8 +208,28 @@ export async function invokeSkillCreator(
     proc.on('close', (code: number) => {
       clearTimeout(timeout);
 
+      // Check for auth errors in JSON response (Claude CLI returns error in JSON)
+      if (stdout) {
+        try {
+          const parsed = JSON.parse(stdout);
+          if (parsed.is_error && parsed.result) {
+            const errorMsg = parsed.result;
+            if (errorMsg.includes('Invalid API key') || errorMsg.includes('/login')) {
+              console.warn(`Authentication required: ${errorMsg}. Run 'claude /login' to authenticate.`);
+            } else {
+              console.warn(`skill-creator error: ${errorMsg}`);
+            }
+            resolve(null);
+            return;
+          }
+        } catch {
+          // Not JSON, continue
+        }
+      }
+
       if (code !== 0) {
-        console.warn(`skill-creator exited with code ${code}: ${stderr}`);
+        const errorDetail = stderr || stdout.slice(0, 200) || 'No error details';
+        console.warn(`skill-creator exited with code ${code}: ${errorDetail}`);
         resolve(null);
         return;
       }
