@@ -1,10 +1,22 @@
 /**
  * Markdown test definition parser - parses test files with YAML frontmatter
+ * and auto-generates tests from SKILL.md when no tests exist.
+ *
+ * Enhanced generation uses skill-creator + @claude-code-guide for better
+ * test quality via concept extraction and testing pattern awareness.
  */
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import matter from 'gray-matter';
 import type { TestDefinition } from '../types/index.js';
+import { SkillContentCollector } from './skill-content-collector.js';
+import { withRetry } from './retry-with-degrade-utils.js';
+import {
+  ensureSkillCreatorInstalled,
+  invokeSkillCreator,
+  type SkillAnalysis,
+} from './skill-creator-invoker.js';
+import { buildEnhancedTestPrompt } from './enhanced-test-prompt-builder.js';
 
 /** Default values for test definitions */
 const DEFAULTS = {
@@ -12,6 +24,25 @@ const DEFAULTS = {
   timeout: 120,
   concepts: [] as string[],
 };
+
+/** Generated test from Claude CLI JSON output */
+interface GeneratedTest {
+  name: string;
+  test_type: 'knowledge' | 'task';
+  concepts: string[];
+  timeout: number;
+  prompt: string;
+  expected_items: string[];
+}
+
+/** Claude CLI JSON response structure */
+interface ClaudeCliResponse {
+  type?: string;
+  subtype?: string;
+  result?: string;
+  skill_name?: string;
+  tests?: GeneratedTest[];
+}
 
 /**
  * Parse a single test file
@@ -214,140 +245,358 @@ export async function discoverTests(skillPath: string): Promise<TestDefinition[]
   const skillMdPath = join(skillPath, 'SKILL.md');
   try {
     await stat(skillMdPath);
-    return generateTestsFromSkillMd(skillPath, skillMdPath);
+    return generateTestsFromSkillMd(skillPath);
   } catch {
     return [];
   }
 }
 
 /**
- * Spawn Claude CLI to generate tests (returns promise)
+ * Prompt template for test generation - requests JSON-only output
  */
-async function spawnClaudeCli(prompt: string, cwd: string, timeout: number = 300000): Promise<string> {
+const TEST_GENERATION_PROMPT = `You must respond with ONLY a JSON object. No explanation, no markdown code blocks, just raw JSON.
+
+Generate tests for this skill. Output format:
+{"skill_name":"<name>","tests":[{"name":"<skill>-<topic>","test_type":"knowledge"|"task","concepts":["..."],"timeout":120|180,"prompt":"...","expected_items":["..."]}]}
+
+Rules:
+- 2-4 tests, at least 1 knowledge + 1 task
+- Extract concepts from Key Concepts Index or section headers
+- timeout: 120 (knowledge), 180 (task)
+- 4-8 expected_items per test
+
+Skill content:
+{skill_content}
+
+JSON:`;
+
+/**
+ * Extract JSON from Claude CLI response - handles various formats
+ */
+function extractJsonFromResponse(text: string): string | null {
+  // Patterns to try in order of preference
+  const patterns = [
+    /```json\s*\n([\s\S]*?)\n```/,  // ```json ... ```
+    /```\s*\n([\s\S]*?)\n```/,       // ``` ... ```
+    /\{[\s\S]*\}/,                    // Raw JSON object
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const jsonStr = match[1] ?? match[0];
+      // Validate it's actual JSON
+      try {
+        JSON.parse(jsonStr);
+        return jsonStr;
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Spawn Claude CLI with JSON output format
+ */
+async function invokeClaudeCliWithJson(
+  prompt: string,
+  model: string = 'sonnet',
+  timeoutMs: number = 180000
+): Promise<GeneratedTest[] | null> {
   const { spawn } = await import('node:child_process');
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const args = [
-      '-p', prompt,  // Print mode with prompt - non-interactive, exits after completion
-      '--dangerously-skip-permissions',  // Skip permission prompts
-      '--max-turns', '50',  // Limit agentic turns
+      '-p', prompt,
+      '--output-format', 'json',
+      '--model', model,
+      '--dangerously-skip-permissions',
     ];
 
-    console.log('Spawning Claude CLI...');
+    console.log(`Invoking Claude CLI (${model})...`);
 
     const proc = spawn('claude', args, {
-      cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],  // ignore stdin to prevent hanging
-      timeout,
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     let stdout = '';
     let stderr = '';
 
     proc.stdout.on('data', (data: Buffer) => {
-      const chunk = data.toString();
-      stdout += chunk;
-      // Stream progress to console
-      process.stdout.write(chunk);
+      stdout += data.toString();
     });
 
     proc.stderr.on('data', (data: Buffer) => {
       stderr += data.toString();
     });
 
+    const timeout = setTimeout(() => {
+      proc.kill('SIGTERM');
+      console.warn(`Claude CLI timeout after ${timeoutMs}ms`);
+      resolve(null);
+    }, timeoutMs);
+
     proc.on('error', (error: Error) => {
-      reject(new Error(`Failed to spawn Claude CLI: ${error.message}`));
+      clearTimeout(timeout);
+      console.warn(`Claude CLI error: ${error.message}`);
+      resolve(null);
     });
 
     proc.on('close', (code: number) => {
+      clearTimeout(timeout);
+
       if (code !== 0) {
-        reject(new Error(`Claude CLI exited with code ${code}: ${stderr}`));
-      } else {
-        resolve(stdout);
+        console.warn(`Claude CLI exited with code ${code}: ${stderr}`);
+        resolve(null);
+        return;
+      }
+
+      try {
+        // Parse the outer JSON response from Claude CLI
+        // Format: {"type": "result", "subtype": "success", "result": <actual_result>}
+        const response = JSON.parse(stdout) as ClaudeCliResponse;
+
+        if (response.result !== undefined) {
+          const inner = response.result;
+
+          // Result might be a JSON string that needs parsing
+          if (typeof inner === 'string') {
+            // Try extracting JSON from markdown code blocks
+            const jsonStr = extractJsonFromResponse(inner);
+            if (jsonStr) {
+              try {
+                const parsed = JSON.parse(jsonStr) as ClaudeCliResponse;
+                resolve(parsed.tests || null);
+                return;
+              } catch {
+                // Fall through
+              }
+            }
+
+            // Try direct parsing
+            try {
+              const parsed = JSON.parse(inner) as ClaudeCliResponse;
+              resolve(parsed.tests || null);
+              return;
+            } catch {
+              console.warn(`Could not parse JSON from response: ${inner.slice(0, 300)}`);
+              resolve(null);
+              return;
+            }
+          }
+
+          // inner is already an object
+          const innerObj = inner as unknown as ClaudeCliResponse;
+          resolve(innerObj.tests || null);
+          return;
+        }
+
+        // Response might be the direct output
+        resolve(response.tests || null);
+      } catch (error) {
+        console.warn(`Failed to parse Claude response: ${error}`);
+        resolve(null);
       }
     });
   });
 }
 
 /**
- * Auto-generate tests from SKILL.md using Claude Code CLI
+ * Format a generated test into skillmark test.md format
  */
-async function generateTestsFromSkillMd(skillPath: string, skillMdPath: string): Promise<TestDefinition[]> {
-  const { mkdir } = await import('node:fs/promises');
+function formatTestToMarkdown(test: GeneratedTest): string {
+  const lines = [
+    '---',
+    `name: ${test.name}`,
+    `type: ${test.test_type}`,
+    'concepts:',
+  ];
 
+  for (const concept of test.concepts) {
+    lines.push(`  - ${concept}`);
+  }
+
+  lines.push(`timeout: ${test.timeout}`);
+  lines.push('---');
+  lines.push('');
+  lines.push('# Prompt');
+  lines.push('');
+  lines.push(test.prompt);
+  lines.push('');
+  lines.push('# Expected');
+  lines.push('');
+  lines.push('The response should cover:');
+
+  for (const item of test.expected_items) {
+    lines.push(`- [ ] ${item}`);
+  }
+
+  lines.push('');
+  return lines.join('\n');
+}
+
+/**
+ * Convert generated test to TestDefinition
+ */
+function convertToTestDefinition(test: GeneratedTest, testsDir: string): TestDefinition {
+  const filename = `${test.name}-test.md`;
+  return {
+    name: test.name,
+    type: test.test_type,
+    concepts: test.concepts,
+    timeout: test.timeout,
+    prompt: test.prompt,
+    expected: test.expected_items,
+    sourcePath: join(testsDir, filename),
+  };
+}
+
+/**
+ * Perform enhanced skill analysis using skill-creator with @claude-code-guide.
+ *
+ * Returns analysis with capabilities, concepts, edge cases, and testing patterns.
+ * Returns null if skill-creator is unavailable or analysis fails.
+ */
+async function performEnhancedSkillAnalysis(
+  skillPath: string
+): Promise<SkillAnalysis | null> {
+  try {
+    // Ensure skill-creator is installed
+    const skillCreatorPath = await ensureSkillCreatorInstalled();
+
+    // Invoke skill-creator with retry (1 retry attempt)
+    const analysis = await withRetry(
+      () => invokeSkillCreator(skillPath, skillCreatorPath),
+      {
+        maxRetries: 1,
+        delayMs: 2000,
+        onRetry: (attempt, error) => {
+          console.log(`Retrying skill analysis (attempt ${attempt + 1}): ${error.message}`);
+        },
+      }
+    );
+
+    return analysis;
+  } catch (error) {
+    console.warn(`Enhanced analysis unavailable: ${(error as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * Auto-generate tests from SKILL.md using Claude Code CLI with structured JSON output.
+ *
+ * Enhanced flow:
+ * 1. Try to invoke skill-creator with @claude-code-guide for skill analysis
+ * 2. Build enhanced prompt with analysis (capabilities, concepts, edge cases)
+ * 3. If analysis fails, gracefully degrade to basic prompt
+ * 4. Generate tests via Claude CLI
+ */
+async function generateTestsFromSkillMd(skillPath: string): Promise<TestDefinition[]> {
   const testsDir = join(skillPath, 'tests');
 
-  console.log('Generating tests using Claude Code CLI...');
+  console.log('Generating tests using Claude Code CLI (enhanced mode)...');
+
+  // Validate and collect skill content
+  const collector = new SkillContentCollector(skillPath);
+  const validation = await collector.validate();
+
+  if (!validation.valid) {
+    console.warn(`Invalid skill: ${validation.message}`);
+    return generateFallbackTests(skillPath);
+  }
+
+  const skillName = await collector.getSkillName();
+  console.log(`Analyzing skill: ${skillName}`);
+
+  // Attempt enhanced skill analysis (with graceful degradation)
+  console.log('Attempting enhanced skill analysis with skill-creator...');
+  const analysis = await performEnhancedSkillAnalysis(skillPath);
+
+  if (analysis) {
+    console.log('Enhanced analysis successful - using enriched prompt');
+  } else {
+    console.log('Enhanced analysis unavailable - using basic prompt');
+  }
+
+  // Collect and format skill content for prompt
+  const skillContent = await collector.formatForPrompt();
+
+  // Build prompt (enhanced with analysis or basic fallback)
+  const prompt = buildEnhancedTestPrompt(skillContent, analysis);
+
+  // Invoke Claude CLI with JSON output
+  const generatedTests = await invokeClaudeCliWithJson(prompt);
+
+  if (!generatedTests || generatedTests.length === 0) {
+    console.warn('No tests generated from Claude CLI');
+    return generateFallbackTests(skillPath);
+  }
+
+  console.log(`Generated ${generatedTests.length} tests`);
 
   // Create tests directory
   await mkdir(testsDir, { recursive: true });
 
-  // Build prompt for Claude CLI
-  const prompt = `Read the skill at ${skillMdPath} and generate 3-5 comprehensive test files in ${testsDir}.
+  // Write test files and collect TestDefinitions
+  const tests: TestDefinition[] = [];
+  let written = 0;
 
-IMPORTANT: Use the Write tool to create each test file directly.
+  for (const test of generatedTests) {
+    const filename = `${test.name}-test.md`;
+    const filepath = join(testsDir, filename);
 
-Use this EXACT test format for each .md file:
----
-name: descriptive-test-name
-type: task
-concepts: [concept1, concept2]
-timeout: 120
----
-
-# Prompt
-A specific question or task that tests a particular aspect of the skill.
-
-# Expected
-- [ ] First expected outcome or behavior
-- [ ] Second expected outcome or behavior
-- [ ] Third expected outcome (if applicable)
-
-Generate tests that cover:
-1. Basic usage - core functionality test
-2. Edge cases - unusual inputs or scenarios
-3. Error handling - invalid inputs, missing data
-4. Advanced scenarios - complex use cases
-
-Name files like: 01-basic-usage.md, 02-edge-cases.md, 03-error-handling.md
-
-After creating all test files, list what was created.`;
-
-  try {
-    // Spawn Claude CLI with proper flags
-    await spawnClaudeCli(prompt, skillPath, 300000);
-
-    console.log('\nClaude CLI completed. Loading generated tests...');
-
-    // Load the generated tests
-    const tests = await loadTestsFromDirectory(testsDir);
-
-    if (tests.length > 0) {
-      console.log(`Loaded ${tests.length} generated test(s)`);
-      return tests;
+    try {
+      await stat(filepath);
+      console.log(`Skipping existing: ${filename}`);
+    } catch {
+      // File doesn't exist, create it
+      const content = formatTestToMarkdown(test);
+      await writeFile(filepath, content, 'utf-8');
+      console.log(`Created: ${filename}`);
+      written++;
     }
-  } catch (error) {
-    console.warn(`Claude CLI test generation failed: ${error}`);
-    console.log('Falling back to basic test generation...');
+
+    tests.push(convertToTestDefinition(test, testsDir));
   }
 
-  // Fallback: generate basic test from SKILL.md metadata
-  const content = await readFile(skillMdPath, 'utf-8');
-  const nameMatch = content.match(/^name:\s*(.+)$/m) || content.match(/^#\s+(.+)$/m);
-  const skillName = nameMatch?.[1]?.trim() || 'skill';
-  const descMatch = content.match(/^description:\s*(.+)$/m);
-  const desc = descMatch?.[1]?.trim() || '';
+  console.log(`Summary: ${written} created, ${generatedTests.length - written} skipped`);
+  console.log(`Output directory: ${testsDir}`);
 
-  const tests: TestDefinition[] = [{
-    name: `${skillName}-basic-usage`,
-    type: 'task',
-    prompt: `Activate and use the skill "${skillName}" at ${skillPath}. ${desc}`,
-    expected: ['Skill activates correctly', 'Produces relevant output', 'No errors'],
-    timeout: 120,
-    concepts: ['basic-usage'],
-    sourcePath: skillMdPath,
-  }];
-
-  console.log(`Generated ${tests.length} fallback test(s)`);
   return tests;
+}
+
+/**
+ * Generate fallback tests when Claude CLI fails
+ */
+async function generateFallbackTests(skillPath: string): Promise<TestDefinition[]> {
+  const skillMdPath = join(skillPath, 'SKILL.md');
+
+  console.log('Falling back to basic test generation...');
+
+  try {
+    const content = await readFile(skillMdPath, 'utf-8');
+    const { data: frontmatter } = matter(content);
+
+    const skillName = frontmatter.name || 'skill';
+    const desc = frontmatter.description || '';
+
+    const tests: TestDefinition[] = [{
+      name: `${skillName}-basic-usage`,
+      type: 'task',
+      prompt: `Activate and use the skill "${skillName}" at ${skillPath}. ${desc}`,
+      expected: ['Skill activates correctly', 'Produces relevant output', 'No errors'],
+      timeout: 120,
+      concepts: ['basic-usage'],
+      sourcePath: skillMdPath,
+    }];
+
+    console.log(`Generated ${tests.length} fallback test(s)`);
+    return tests;
+  } catch {
+    return [];
+  }
 }

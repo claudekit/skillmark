@@ -1131,6 +1131,65 @@ function renderHowItWorksPage(): string {
                                         │  Workers+D1 │
                                         └─────────────┘</code></pre>
     </section>
+
+    <section class="doc-section">
+      <h2>Enhanced Test Generation</h2>
+      <p>Skillmark uses an enhanced test generation flow when no tests exist:</p>
+      <pre><code>┌─────────────┐     ┌─────────────────────────────────────┐
+│  SKILL.md   │────▶│  skill-creator + @claude-code-guide │
+└─────────────┘     └─────────────────────────────────────┘
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼ (success)     ▼ (fails)       │
+            ┌─────────────┐  ┌─────────────┐        │
+            │  Enhanced   │  │  Basic      │        │
+            │  Prompt     │  │  Prompt     │        │
+            └──────┬──────┘  └──────┬──────┘        │
+                   └───────────┬────┘               │
+                               ▼                    │
+                       ┌─────────────┐              │
+                       │  Test Files │◀─────────────┘
+                       └─────────────┘</code></pre>
+    </section>
+
+    <section class="doc-section">
+      <h2>skill-creator Skill</h2>
+      <p>The <code>skill-creator</code> skill analyzes SKILL.md to extract structured metadata:</p>
+      <table>
+        <tr><td><strong>capabilities</strong></td><td>Core capabilities (3-6 items)</td></tr>
+        <tr><td><strong>keyConcepts</strong></td><td>Key topics/keywords (5-10 items)</td></tr>
+        <tr><td><strong>edgeCases</strong></td><td>Failure scenarios to test (3-5 items)</td></tr>
+        <tr><td><strong>testingPatterns</strong></td><td>Claude Code testing best practices</td></tr>
+        <tr><td><strong>toolInvocations</strong></td><td>Expected tool calls</td></tr>
+      </table>
+      <p>If skill-creator is not installed, Skillmark auto-installs it via:</p>
+      <pre><code>npx skills add https://github.com/anthropics/claudekit-skills --skill skill-creator</code></pre>
+    </section>
+
+    <section class="doc-section">
+      <h2>claude-code-guide Subagent</h2>
+      <p>The <code>@claude-code-guide</code> subagent provides Claude Code-specific testing patterns:</p>
+      <ul>
+        <li>Skill invocation patterns and best practices</li>
+        <li>Common failure modes and edge cases</li>
+        <li>Tool usage expectations (Read, Write, Bash, etc.)</li>
+        <li>Testing patterns for knowledge vs task tests</li>
+      </ul>
+      <p>It's referenced via prompt engineering in skill-creator:</p>
+      <pre><code>Use @"claude-code-guide (agent)" to understand Claude Code CLI patterns...</code></pre>
+      <p>Claude's built-in subagent routing handles the reference automatically.</p>
+    </section>
+
+    <section class="doc-section">
+      <h2>Error Handling</h2>
+      <p>Skillmark uses retry-then-degrade pattern for robustness:</p>
+      <table>
+        <tr><td><strong>skill-creator succeeds</strong></td><td>Enhanced prompt with analysis</td></tr>
+        <tr><td><strong>skill-creator fails (1 retry)</strong></td><td>Degrades to basic prompt</td></tr>
+        <tr><td><strong>Claude CLI fails</strong></td><td>Generates single fallback test</td></tr>
+      </table>
+      <p>This ensures test generation always succeeds, even if enhanced analysis fails.</p>
+    </section>
   `);
 }
 
