@@ -1,0 +1,9 @@
+{
+  "appName": "benchmark-fileops",
+  "version": "1.0.0",
+  "environment": "development",
+  "logging": {
+    "level": "info",
+    "format": "json"
+  }
+}
