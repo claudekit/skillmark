@@ -48,7 +48,10 @@ async function verifyClaudeAuth(): Promise<{ ok: boolean; error?: string }> {
         if (result.is_error && result.result?.includes('Invalid API key')) {
           resolve({
             ok: false,
-            error: `Claude CLI not authenticated. Run 'claude setup-token' or 'claude /login' to authenticate.`,
+            error: `Claude CLI non-interactive mode requires authentication.\n` +
+              `  Run: claude setup-token\n` +
+              `  Or set ANTHROPIC_API_KEY environment variable.\n` +
+              `  Note: Interactive 'claude' works, but skillmark uses non-interactive '-p' mode.`,
           });
           return;
         }
