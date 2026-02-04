@@ -230,7 +230,7 @@ async function spawnClaudeCli(prompt: string, cwd: string, timeout: number = 300
     const args = [
       '-p', prompt,  // Print mode with prompt - non-interactive, exits after completion
       '--dangerously-skip-permissions',  // Skip permission prompts
-      '--max-turns', '10',  // Limit agentic turns
+      '--max-turns', '50',  // Limit agentic turns
     ];
 
     console.log('Spawning Claude CLI...');

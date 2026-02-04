@@ -22,36 +22,32 @@ export async function executeTest(test, skillPath, model, workDir) {
     const startTime = Date.now();
     const modelId = MODEL_MAP[model];
     // Build Claude CLI command
+    // -p is the print mode flag that takes the prompt as argument
     const args = [
-        '--print',
+        '-p', test.prompt, // Print mode with prompt - non-interactive
         '--model', modelId,
         '--output-format', 'json',
         '--max-turns', '50',
+        '--dangerously-skip-permissions', // Skip permission prompts for benchmarks
     ];
     // Add skill if provided
     if (skillPath) {
         args.push('--allowedTools', `Skill(${skillPath})`);
     }
-    // Add the prompt
-    args.push('--prompt', test.prompt);
     try {
         const result = await runClaudeCli(args, workDir, test.timeout * 1000);
         const durationMs = Date.now() - startTime;
-        // Parse the JSONL output from Claude CLI
-        const transcript = parseJsonlOutput(result.stdout);
-        // Extract metrics from transcript
-        const metrics = extractMetrics(transcript);
-        // Extract response text
-        const response = extractResponse(transcript);
+        // Parse the JSON result from Claude CLI
+        const cliResult = parseCliResult(result.stdout);
         return {
-            response,
+            response: cliResult.response,
             transcriptPath,
-            transcript,
-            inputTokens: metrics.inputTokens,
-            outputTokens: metrics.outputTokens,
-            costUsd: metrics.costUsd,
+            transcript: [], // Simplified - we use the result JSON directly
+            inputTokens: cliResult.inputTokens,
+            outputTokens: cliResult.outputTokens,
+            costUsd: cliResult.costUsd,
             durationMs,
-            toolCount: metrics.toolCount,
+            toolCount: cliResult.toolCount,
             success: true,
         };
     }
@@ -78,7 +74,7 @@ async function runClaudeCli(args, cwd, timeoutMs) {
         const proc = spawn('claude', args, {
             cwd,
             env: { ...process.env },
-            stdio: ['pipe', 'pipe', 'pipe'],
+            stdio: ['ignore', 'pipe', 'pipe'], // ignore stdin to prevent hanging
         });
         let stdout = '';
         let stderr = '';
@@ -108,7 +104,40 @@ async function runClaudeCli(args, cwd, timeoutMs) {
     });
 }
 /**
- * Parse JSONL output from Claude CLI
+ * Parse Claude CLI JSON result output
+ */
+function parseCliResult(output) {
+    try {
+        // Find the JSON result in the output (may have other text before it)
+        const jsonMatch = output.match(/\{[\s\S]*"type"\s*:\s*"result"[\s\S]*\}/);
+        if (!jsonMatch) {
+            // Fallback: try parsing the whole output as JSON
+            const parsed = JSON.parse(output.trim());
+            return extractFromCliResult(parsed);
+        }
+        const parsed = JSON.parse(jsonMatch[0]);
+        return extractFromCliResult(parsed);
+    }
+    catch {
+        // Return empty result if parsing fails
+        return { response: '', inputTokens: 0, outputTokens: 0, costUsd: 0, toolCount: 0 };
+    }
+}
+function extractFromCliResult(result) {
+    const usage = result.usage || {};
+    const inputTokens = (usage.input_tokens || 0) +
+        (usage.cache_creation_input_tokens || 0) +
+        (usage.cache_read_input_tokens || 0);
+    return {
+        response: result.result || '',
+        inputTokens,
+        outputTokens: usage.output_tokens || 0,
+        costUsd: result.total_cost_usd || 0,
+        toolCount: result.num_turns || 0, // num_turns as proxy for tool usage
+    };
+}
+/**
+ * Parse JSONL output from Claude CLI (legacy)
  */
 function parseJsonlOutput(output) {
     const entries = [];

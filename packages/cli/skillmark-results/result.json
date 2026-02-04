@@ -1,0 +1,214 @@
+{
+  "skillId": "context-engineering-9e97d08988e2",
+  "skillName": "context-engineering",
+  "skillSource": "/Users/duynguyen/.claude/skills/context-engineering",
+  "model": "opus",
+  "runs": 1,
+  "testResults": [
+    {
+      "test": {
+        "name": "basic-context-check",
+        "type": "task",
+        "concepts": [
+          "context-monitoring",
+          "usage-limits",
+          "token-utilization",
+          "window percentage",
+          "usage limits",
+          "based recommendations"
+        ],
+        "timeout": 120,
+        "prompt": "What is my current context window usage and rate limits? Explain what actions I should take based on the current levels.",
+        "expected": [
+          "Reports current context window percentage (or explains how to obtain it)",
+          "Reports 5-hour and 7-day usage limits (or explains data sources)",
+          "Provides threshold-based recommendations (70% warning, 90% critical)",
+          "Mentions optimization strategies if usage is elevated"
+        ],
+        "sourcePath": "/Users/duynguyen/.claude/skills/context-engineering/tests/01-basic-usage.md"
+      },
+      "metrics": {
+        "accuracy": 20,
+        "tokensTotal": 63529,
+        "tokensInput": 63019,
+        "tokensOutput": 510,
+        "durationMs": 28087,
+        "toolCount": 3,
+        "costUsd": 0.30977925
+      },
+      "matchedConcepts": [
+        "usage-limits",
+        "usage limits"
+      ],
+      "missedConcepts": [
+        "context-monitoring",
+        "token-utilization",
+        "window percentage",
+        "based recommendations",
+        "Reports current context window percentage (or explains how to obtain it)",
+        "Reports 5-hour and 7-day usage limits (or explains data sources)",
+        "Provides threshold-based recommendations (70% warning, 90% critical)",
+        "Mentions optimization strategies if usage is elevated"
+      ],
+      "response": "Based on your current context usage and rate limits:\n\n## Current Status\n- **5-hour limit**: 24% (resets in 2h 34m)\n- **7-day limit**: 44%\n- **Context window**: Not currently at warning levels\n\n## What This Means\n\n### ✅ You're in Good Shape\n- Both usage limits are well below warning thresholds (70%)\n- You have plenty of capacity for normal work\n- No immediate optimization needed\n\n### 📊 Available Capacity\n- **5-hour window**: 76% remaining (~3.8 hours of usage)\n- **7-day window**: 56% remaining (~3.9 days of usage)\n\n## Recommended Actions\n\n### Continue Normal Work\n- No need to restrict usage or optimize aggressively\n- Current levels support full productivity\n\n### Best Practices to Maintain\n1. **Efficient Tool Usage**\n   - Use parallel tool calls when possible\n   - Prefer specialized tools over multiple Bash commands\n   - Use Task tool for complex searches instead of repeated Grep/Glob\n\n2. **Smart Agent Delegation**\n   - Spawn multiple agents in parallel for independent tasks\n   - Keep agent prompts concise but complete\n   - Remember each subagent has 200K token limit\n\n3. **Proactive Monitoring**\n   - Watch for context warnings (70%+ triggers optimization)\n   - Be mindful as 5-hour limit approaches 50%\n   - Plan heavy tasks when limits are low\n\n### When to Take Action\n- **At 50% (5-hour)**: Consider timing of heavy tasks\n- **At 70% (either)**: Start optimizing, use compression\n- **At 90% (either)**: Critical - minimize usage, defer non-urgent work\n\nYour current usage levels are healthy. Continue working normally while following efficient practices. The system will warn you if optimization becomes necessary.",
+      "timestamp": "2026-02-03T14:25:54.825Z",
+      "passed": false
+    },
+    {
+      "test": {
+        "name": "context-optimization-strategies",
+        "type": "task",
+        "concepts": [
+          "four-bucket-strategy",
+          "compaction",
+          "token-reduction",
+          "bucket strategy"
+        ],
+        "timeout": 120,
+        "prompt": "My agent is hitting context limits frequently. What are the main strategies to reduce token consumption while maintaining quality? Provide a prioritized action plan.",
+        "expected": [
+          "Explains the four-bucket strategy (Write, Select, Compress, Isolate)",
+          "Recommends compaction triggers at 70-80% utilization",
+          "Suggests sub-agent partitioning for context isolation",
+          "Mentions 50-70% compaction target with <5% quality loss",
+          "Advises placing critical info at beginning/end positions"
+        ],
+        "sourcePath": "/Users/duynguyen/.claude/skills/context-engineering/tests/02-optimization-strategies.md"
+      },
+      "metrics": {
+        "accuracy": 33.33333333333333,
+        "tokensTotal": 64237,
+        "tokensInput": 63079,
+        "tokensOutput": 1158,
+        "durationMs": 44068,
+        "toolCount": 3,
+        "costUsd": 0.35937975
+      },
+      "matchedConcepts": [
+        "compaction",
+        "bucket strategy",
+        "Mentions 50-70% compaction target with <5% quality loss"
+      ],
+      "missedConcepts": [
+        "four-bucket-strategy",
+        "token-reduction",
+        "Explains the four-bucket strategy (Write, Select, Compress, Isolate)",
+        "Recommends compaction triggers at 70-80% utilization",
+        "Suggests sub-agent partitioning for context isolation",
+        "Advises placing critical info at beginning/end positions"
+      ],
+      "response": "Based on the context-engineering expertise, here's your prioritized action plan to reduce token consumption while maintaining quality:\n\n## 🎯 **Immediate Actions (Quick Wins)**\n\n### 1. **Implement Progressive Disclosure**\n- Load information just-in-time, not all upfront\n- Use focused file reads with specific line ranges instead of full files\n- Only fetch context when actually needed for the current task\n\n### 2. **Optimize Tool Usage**\n- **Consolidate parallel tool calls** when independent (reduces response overhead)\n- **Use specialized tools** instead of generic ones:\n  - `Glob` for file discovery (not `find` in Bash)\n  - `Grep` for content search (not `grep` in Bash)\n  - `Task` with `Explore` agent for codebase exploration (not manual searching)\n\n### 3. **Strategic File Operations**\n- **Read once, edit multiple times** - avoid re-reading files\n- Use `Edit` with larger context strings for uniqueness (prevents failures)\n- Prefer `Edit` over `Write` for existing files (preserves context)\n\n## 🔧 **Medium-Term Optimizations**\n\n### 4. **Multi-Agent Partitioning**\n- **Isolate context-heavy operations** in sub-agents\n- Each sub-agent has fresh 200K context window\n- Pass only essential results back to main context\n- Example: Use `researcher` agents in parallel for different topics\n\n### 5. **Smart Summarization**\n- **Implement 70% threshold triggers** for compaction\n- Summarize completed phases before starting new ones\n- Keep only actionable insights, discard verbose explanations\n- Target 50-70% reduction with <5% quality loss\n\n### 6. **Context Placement Strategy**\n- **Critical info at beginning/end** (U-shaped attention curve)\n- Move completed tasks to external files\n- Use scratchpad directory for intermediate results\n- Archive old plans/reports to reduce active context\n\n## 📊 **Advanced Strategies**\n\n### 7. **Four-Bucket Approach**\n1. **Write**: Save to `/scratchpad` or project files\n2. **Select**: Use focused searches/reads\n3. **Compress**: Summarize verbose outputs\n4. **Isolate**: Delegate to specialized agents\n\n### 8. **Tool Description Engineering**\n- Minimize tool description tokens\n- Remove redundant examples\n- Focus on \"what, when, inputs, returns\"\n\n### 9. **Workflow Optimization**\n- **Plan → Implement → Test → Review** in sequence (not all at once)\n- Use background tasks for long operations\n- Implement caching for repeated operations\n\n## 📈 **Monitoring & Metrics**\n\n### 10. **Track Key Indicators**\n- Monitor context usage percentage\n- Set alerts at 70% (warning) and 90% (critical)\n- Measure tokens-per-task, not tokens-per-request\n- Target 70%+ cache hit rates\n\n## 🚫 **Anti-Patterns to Avoid**\n\n1. **Exhaustive context loading** - Only load what's needed\n2. **Redundant file reads** - Cache and reuse\n3. **Single agent for everything** - Distribute work\n4. **Verbose responses** - Be concise\n5. **No cleanup** - Remove completed context\n\n## 💡 **Quick Implementation Checklist**\n\n```markdown\n□ Use Task tool with Explore agent for codebase navigation\n□ Implement 70% context threshold checks\n□ Move completed work to external files\n□ Use parallel sub-agents for independent tasks\n□ Prefer focused reads over full file reads\n□ Summarize before transitioning phases\n□ Archive old plans to ./plans/archive/\n□ Use scratchpad for temporary data\n□ Consolidate parallel tool calls\n□ Monitor context usage in real-time\n```\n\n## 📝 **Example Optimized Workflow**\n\n```yaml\nBefore (High Token Usage):\n1. Read entire codebase\n2. Keep all context active\n3. Single agent does everything\n4. Verbose explanations\n\nAfter (Optimized):\n1. Scout agent finds relevant files\n2. Read only specific sections\n3. Delegate to specialized agents\n4. Summarize and archive completed work\n5. Use scratchpad for intermediate data\n```\n\nStart with items 1-3 for immediate impact, then progressively implement the rest based on your specific use cases. Remember: **quality through curation, not exhaustion**.",
+      "timestamp": "2026-02-03T14:26:38.896Z",
+      "passed": false
+    },
+    {
+      "test": {
+        "name": "context-degradation-debugging",
+        "type": "task",
+        "concepts": [
+          "degradation",
+          "lost-in-middle",
+          "attention-mechanics",
+          "debugging",
+          "attention curve"
+        ],
+        "timeout": 120,
+        "prompt": "My agent ignores instructions placed in the middle of long prompts. It follows instructions at the start and end but misses critical middle content. What's happening and how do I fix it?",
+        "expected": [
+          "Explains U-shaped attention curve (favors beginning/end positions)",
+          "Identifies \"lost-in-middle\" phenomenon as the cause",
+          "Recommends repositioning critical info to beginning or end",
+          "Suggests context compression or chunking strategies",
+          "May reference degradation reference documentation"
+        ],
+        "sourcePath": "/Users/duynguyen/.claude/skills/context-engineering/tests/04-degradation-debugging.md"
+      },
+      "metrics": {
+        "accuracy": 0,
+        "tokensTotal": 32085,
+        "tokensInput": 30907,
+        "tokensOutput": 1178,
+        "durationMs": 40275,
+        "toolCount": 1,
+        "costUsd": 0.290553
+      },
+      "matchedConcepts": [],
+      "missedConcepts": [
+        "degradation",
+        "lost-in-middle",
+        "attention-mechanics",
+        "debugging",
+        "attention curve",
+        "Explains U-shaped attention curve (favors beginning/end positions)",
+        "Identifies \"lost-in-middle\" phenomenon as the cause",
+        "Recommends repositioning critical info to beginning or end",
+        "Suggests context compression or chunking strategies",
+        "May reference degradation reference documentation"
+      ],
+      "response": "This is a classic case of the \"lost in the middle\" problem with LLMs. Here's what's happening and how to fix it:\n\n## Why Instructions Get Lost\n\nLLMs tend to pay more attention to content at the beginning and end of prompts, with middle sections receiving less focus. This is due to how attention mechanisms work in transformers - it's like reading a long document where you remember the introduction and conclusion better than the middle chapters.\n\n## How to Fix It\n\n### 1. **Restructure Your Prompts**\nMove critical instructions to the beginning or end:\n\n```python\n# Better structure\nprompt = \"\"\"\nCRITICAL INSTRUCTIONS:\n1. Always validate input data\n2. Use error handling for all API calls\n3. Return structured JSON responses\n\n[Context and details here...]\n\nREMINDER: Follow the critical instructions above.\n\"\"\"\n```\n\n### 2. **Use Clear Section Markers**\nBreak up long prompts with clear headers and visual separators:\n\n```python\nprompt = \"\"\"\n=== PRIMARY OBJECTIVES ===\n- Validate all inputs\n- Handle errors gracefully\n\n=== CONTEXT ===\n[Your context here]\n\n=== MANDATORY REQUIREMENTS ===\n⚠️ CRITICAL: Never skip validation\n⚠️ CRITICAL: Always use try-catch blocks\n\n=== TASK ===\n[Specific task details]\n\"\"\"\n```\n\n### 3. **Repeat Critical Instructions**\nReinforce important points multiple times:\n\n```python\n# At the start\n\"IMPORTANT: All responses must be JSON formatted\"\n\n# In the middle (with emphasis)\n\"⚡ REMINDER: JSON format required (see above)\"\n\n# At the end\n\"Final check: Ensure response is valid JSON\"\n```\n\n### 4. **Use Attention-Grabbing Formatting**\n```python\nprompt = \"\"\"\n### 🚨 CRITICAL RULES (MUST FOLLOW) 🚨\n1. Validate input types\n2. Check boundaries\n3. Return error codes\n\n[Other content...]\n\n⚡⚡⚡ REMEMBER THE CRITICAL RULES ABOVE ⚡⚡⚡\n\"\"\"\n```\n\n### 5. **Implement Instruction Chaining**\nBreak complex prompts into smaller, sequential calls:\n\n```python\n# Instead of one huge prompt\nresponse1 = agent.execute(\"First, analyze the requirements...\")\nresponse2 = agent.execute(f\"Based on {response1}, now implement...\")\nresponse3 = agent.execute(f\"Finally, validate that {response2} follows all rules...\")\n```\n\n### 6. **Use Structured Templates**\nCreate a consistent format that the agent learns to expect:\n\n```python\nAGENT_TEMPLATE = \"\"\"\n[RULES - ALWAYS FOLLOW]\n{rules}\n\n[CONTEXT]\n{context}\n\n[TASK]\n{task}\n\n[VALIDATION CHECKLIST]\n□ Did you follow all rules?\n□ Is the output formatted correctly?\n□ Have you handled edge cases?\n\"\"\"\n```\n\n### 7. **Add Validation Loops**\nBuild in checks to ensure compliance:\n\n```python\n# After agent response\nvalidation_prompt = \"\"\"\nReview your previous response and verify:\n1. Did you follow the JSON format rule?\n2. Did you include error handling?\n3. Did you validate inputs?\n\nIf any are missing, provide a corrected version.\n\"\"\"\n```\n\n## Example Implementation\n\nHere's a practical example combining these techniques:\n\n```python\ndef create_robust_prompt(task, context, critical_rules):\n    return f\"\"\"\n🎯 PRIMARY DIRECTIVES (MANDATORY)\n{chr(10).join(f'• {rule}' for rule in critical_rules)}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📋 CONTEXT\n{context}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🔧 TASK\n{task}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ CRITICAL REMINDERS:\n{chr(10).join(f'⚡ {rule}' for rule in critical_rules[:3])}\n\nBEFORE RESPONDING, VERIFY:\n✓ All primary directives followed\n✓ Task completed as specified\n✓ Output meets all requirements\n\"\"\"\n```\n\n## Testing Your Fix\n\nCreate a validation function to check if instructions were followed:\n\n```python\ndef validate_agent_compliance(response, required_elements):\n    \"\"\"Check if agent followed all instructions\"\"\"\n    missing = []\n    for element in required_elements:\n        if element not in response:\n            missing.append(element)\n    \n    if missing:\n        print(f\"⚠️ Agent missed: {missing}\")\n        return False\n    return True\n```\n\nBy implementing these strategies, you should see significant improvement in your agent's ability to follow all instructions, regardless of where they appear in the prompt.",
+      "timestamp": "2026-02-03T14:29:19.180Z",
+      "passed": false
+    },
+    {
+      "test": {
+        "name": "test-context-optimization-strategy",
+        "type": "task",
+        "concepts": [
+          "context-optimization",
+          "four-bucket-strategy",
+          "token-efficiency",
+          "bucket strategy",
+          "end positions"
+        ],
+        "timeout": 120,
+        "prompt": "My Claude agent is hitting context limits at 85% utilization during long coding sessions. What optimization strategies should I implement to reduce token usage while maintaining quality?",
+        "expected": [
+          "Mentions the four-bucket strategy (Write, Select, Compress, Isolate)",
+          "Recommends implementing compaction/summarization at 70-80% threshold",
+          "Suggests using sub-agents for context isolation",
+          "Addresses progressive disclosure or just-in-time loading",
+          "Mentions placing critical info at beginning/end positions (attention mechanics)"
+        ],
+        "sourcePath": "/Users/duynguyen/.claude/skills/context-engineering/tests/test-context-optimization-strategy.md"
+      },
+      "metrics": {
+        "accuracy": 10,
+        "tokensTotal": 64062,
+        "tokensInput": 63059,
+        "tokensOutput": 1003,
+        "durationMs": 42654,
+        "toolCount": 3,
+        "costUsd": 0.34729725
+      },
+      "matchedConcepts": [
+        "bucket strategy"
+      ],
+      "missedConcepts": [
+        "context-optimization",
+        "four-bucket-strategy",
+        "token-efficiency",
+        "end positions",
+        "Mentions the four-bucket strategy (Write, Select, Compress, Isolate)",
+        "Recommends implementing compaction/summarization at 70-80% threshold",
+        "Suggests using sub-agents for context isolation",
+        "Addresses progressive disclosure or just-in-time loading",
+        "Mentions placing critical info at beginning/end positions (attention mechanics)"
+      ],
+      "response": "Based on my analysis of context engineering best practices, here are the key optimization strategies for your Claude agent at 85% utilization:\n\n## Immediate Actions (Priority 1)\n\n### 1. **Implement Progressive Compaction**\n- At 85%, you're in the critical zone. Start aggressive summarization:\n  - Compress older conversation turns into bullet-point summaries\n  - Keep only the most recent 2-3 exchanges in full detail\n  - Use the Write tool to save full context to scratchpad before compacting\n\n### 2. **Partition Work Across Sub-agents**\n- Split complex tasks into isolated sub-agent calls:\n  - Each sub-agent gets only 200K tokens (fresh context)\n  - Use background execution (`run_in_background: true`) for parallel work\n  - Example: Research → Implementation → Testing as separate agents\n\n### 3. **External State Management**\n- Move context out of conversation:\n  ```\n  Scratchpad: /private/tmp/claude-502/.../scratchpad/\n  - session-state.json (current progress)\n  - code-snippets.md (relevant code)\n  - decisions.md (architectural choices)\n  ```\n\n## Optimization Techniques (Priority 2)\n\n### 4. **Smart Tool Usage**\n- Avoid redundant file reads - cache results in scratchpad\n- Use focused searches instead of broad exploration:\n  - ❌ \"Read entire file\" → ✅ \"Read lines 50-100\"\n  - ❌ Multiple grep calls → ✅ Single Task with Explore agent\n\n### 5. **Compression Strategies**\n- **Code**: Extract to files, reference by path\n- **Logs**: Keep only error lines + context\n- **Plans**: Summarize completed phases to 2-3 lines\n- **Research**: Bullet points only, details in reports\n\n### 6. **Context-Aware Responses**\n- Sacrifice grammar for concision\n- Use abbreviations and shorthand\n- Skip explanations for routine operations\n- Focus on actions over narration\n\n## System-Level Optimizations (Priority 3)\n\n### 7. **Four-Bucket Strategy Implementation**\n```\nWRITE → scratchpad files (unlimited storage)\nSELECT → grep/glob for specific needs\nCOMPRESS → summarize older content\nISOLATE → delegate to sub-agents\n```\n\n### 8. **Critical Information Placement**\n- Place vital context at start/end of messages\n- Middle content gets 50% less attention\n- Structure: Context → Action → Result\n\n### 9. **Tool Description Optimization**\n- Consolidate similar tools\n- Remove verbose tool descriptions\n- Use concise parameter descriptions\n\n## Monitoring & Triggers\n\n### 10. **Set Up Automatic Triggers**\n```\n70% → Start light compression\n80% → Aggressive compression + sub-agent delegation  \n85% → Emergency mode (your current state)\n90% → Critical - new session recommended\n```\n\n## Example Implementation\n\nHere's how to handle a complex task at 85%:\n\n```python\n# Instead of this (high context usage):\n\"Let me read all these files and analyze...\"\n\n# Do this (optimized):\n1. Write current state to scratchpad\n2. Launch focused sub-agent:\n   Task(\n     subagent_type=\"explore\",\n     prompt=\"Find authentication implementation\",\n     run_in_background=true\n   )\n3. Continue other work while waiting\n4. Read only the summary results\n```\n\n## Emergency Protocol (For Your Current 85%)\n\n1. **Immediate**: Save conversation state to `/scratchpad/session-state.md`\n2. **Delegate**: Use Task tool for any remaining complex work\n3. **Compress**: Summarize all completed work to bullet points\n4. **Continue**: Work with compressed context + external references\n\nWould you like me to demonstrate any of these techniques with your current session, or help you implement a specific optimization strategy?",
+      "timestamp": "2026-02-03T14:32:01.847Z",
+      "passed": false
+    }
+  ],
+  "aggregatedMetrics": {
+    "accuracy": 15.833333333333332,
+    "tokensTotal": 55978,
+    "tokensInput": 55016,
+    "tokensOutput": 962,
+    "durationMs": 38771,
+    "toolCount": 3,
+    "costUsd": 0.32675231250000003
+  },
+  "timestamp": "2026-02-03T14:32:01.848Z",
+  "version": "0.1.0",
+  "hash": "230f54d5396b677b"
+}
