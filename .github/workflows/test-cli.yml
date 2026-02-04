@@ -1,0 +1,29 @@
+name: Test CLI
+
+on:
+  push:
+    branches: [dev]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint CLI
+        run: pnpm --filter @skillmark/cli lint
+
+      - name: Build CLI
+        run: pnpm --filter @skillmark/cli build
