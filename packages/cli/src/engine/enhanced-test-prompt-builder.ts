@@ -108,7 +108,7 @@ ${skillContent}
   "name":"<skill>-<topic>",
   "test_type":"knowledge"|"task",
   "concepts":["extracted from analysis above"],
-  "timeout":120|180,
+  "timeout":600|1800,
   "prompt":"...",
   "expected_items":["..."]
 }]}
@@ -118,7 +118,7 @@ ${skillContent}
 - Use concepts from the Skill Analysis section above
 - Consider edge cases listed above when designing tests
 - Include expected tool invocations in task test expected_items
-- timeout: 120 (knowledge), 180 (task)
+- timeout: 600 (knowledge/10min), 1800 (task/30min)
 - 4-8 expected_items per test
 - Test names should be descriptive: <skill-name>-<topic>
 
@@ -132,12 +132,12 @@ function buildBasicTestPrompt(skillContent: string): string {
   return `You must respond with ONLY a JSON object. No explanation, no markdown code blocks, just raw JSON.
 
 Generate tests for this skill. Output format:
-{"skill_name":"<name>","tests":[{"name":"<skill>-<topic>","test_type":"knowledge"|"task","concepts":["..."],"timeout":120|180,"prompt":"...","expected_items":["..."]}]}
+{"skill_name":"<name>","tests":[{"name":"<skill>-<topic>","test_type":"knowledge"|"task","concepts":["..."],"timeout":600|1800,"prompt":"...","expected_items":["..."]}]}
 
 Rules:
 - 2-4 tests, at least 1 knowledge + 1 task
 - Extract concepts from Key Concepts Index or section headers
-- timeout: 120 (knowledge), 180 (task)
+- timeout: 600 (knowledge/10min), 1800 (task/30min)
 - 4-8 expected_items per test
 
 Skill content:

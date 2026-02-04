@@ -21,7 +21,7 @@ import { buildEnhancedTestPrompt } from './enhanced-test-prompt-builder.js';
 /** Default values for test definitions */
 const DEFAULTS = {
   type: 'knowledge' as const,
-  timeout: 120,
+  timeout: 600, // 10 minutes - agent tests can be multi-step
   concepts: [] as string[],
 };
 
@@ -257,12 +257,12 @@ export async function discoverTests(skillPath: string): Promise<TestDefinition[]
 const TEST_GENERATION_PROMPT = `You must respond with ONLY a JSON object. No explanation, no markdown code blocks, just raw JSON.
 
 Generate tests for this skill. Output format:
-{"skill_name":"<name>","tests":[{"name":"<skill>-<topic>","test_type":"knowledge"|"task","concepts":["..."],"timeout":120|180,"prompt":"...","expected_items":["..."]}]}
+{"skill_name":"<name>","tests":[{"name":"<skill>-<topic>","test_type":"knowledge"|"task","concepts":["..."],"timeout":600|1800,"prompt":"...","expected_items":["..."]}]}
 
 Rules:
 - 2-4 tests, at least 1 knowledge + 1 task
 - Extract concepts from Key Concepts Index or section headers
-- timeout: 120 (knowledge), 180 (task)
+- timeout: 600 (knowledge/10min), 1800 (task/30min)
 - 4-8 expected_items per test
 
 Skill content:
@@ -589,7 +589,7 @@ async function generateFallbackTests(skillPath: string): Promise<TestDefinition[
       type: 'task',
       prompt: `Activate and use the skill "${skillName}" at ${skillPath}. ${desc}`,
       expected: ['Skill activates correctly', 'Produces relevant output', 'No errors'],
-      timeout: 120,
+      timeout: 600,
       concepts: ['basic-usage'],
       sourcePath: skillMdPath,
     }];
