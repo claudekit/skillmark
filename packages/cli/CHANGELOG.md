@@ -1,5 +1,15 @@
 # @skillmark/cli
 
+## 0.3.0
+
+### Minor Changes
+
+- feat: comprehensive benchmark report generation and webapp viewing
+
+  - Add detailed markdown report generation with executive summary, per-test breakdowns, run consistency analysis, concept coverage, security analysis, performance metrics, and recommendations
+  - Upload report to webapp on publish for persistent viewing
+  - Add report viewing modal on skill detail page with rich markdown rendering including tables, blockquotes, and collapsible sections
+
 ## 0.2.0
 
 ### Minor Changes
