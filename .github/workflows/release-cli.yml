@@ -10,7 +10,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     # Skip version bump commits to avoid infinite loop
-    if: ${{ github.event.head_commit.message != 'chore: version packages' }}
+    if: "${{ github.event.head_commit.message != 'chore: version packages' }}"
     permissions:
       contents: write
       pull-requests: write
