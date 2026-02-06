@@ -29,6 +29,12 @@ interface ResultPayload {
   // New fields for GitHub OAuth + enhanced tracking
   testFiles?: Array<{ name: string; content: string }>;
   skillshLink?: string;
+  /** Security benchmark score (0-100) */
+  securityScore?: number;
+  /** Full security breakdown JSON */
+  securityJson?: string;
+  /** Git repository URL (auto-detected from skill directory) */
+  repoUrl?: string;
 }
 
 /** API key info returned from verification */
@@ -81,25 +87,29 @@ apiRouter.post('/results', async (c) => {
       INSERT INTO results (
         id, skill_id, model, accuracy, tokens_total, tokens_input, tokens_output,
         duration_ms, cost_usd, tool_count, runs, hash, raw_json,
-        submitter_github, test_files, skillsh_link
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        submitter_github, test_files, skillsh_link,
+        security_score, security_json, repo_url
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       resultId,
       payload.skillId,
       payload.model,
       payload.accuracy,
       payload.tokensTotal,
-      payload.tokensInput || null,
-      payload.tokensOutput || null,
+      payload.tokensInput ?? null,
+      payload.tokensOutput ?? null,
       payload.durationMs,
       payload.costUsd,
-      payload.toolCount || null,
+      payload.toolCount ?? null,
       payload.runs,
       payload.hash,
       payload.rawJson || null,
       keyInfo.githubUsername || null,
       payload.testFiles ? JSON.stringify(payload.testFiles) : null,
-      payload.skillshLink || null
+      payload.skillshLink || null,
+      payload.securityScore ?? null,
+      payload.securityJson || null,
+      payload.repoUrl || null
     ).run();
 
     // Update API key last used
@@ -138,7 +148,10 @@ apiRouter.get('/leaderboard', async (c) => {
         skill_name as skillName,
         source,
         best_accuracy as bestAccuracy,
+        best_security as bestSecurity,
+        composite_score as compositeScore,
         best_model as bestModel,
+        repo_url as repoUrl,
         avg_tokens as avgTokens,
         avg_cost as avgCost,
         last_tested as lastTested,
@@ -176,7 +189,10 @@ apiRouter.get('/skill/:name', async (c) => {
         skill_name as skillName,
         source,
         best_accuracy as bestAccuracy,
+        best_security as bestSecurity,
+        composite_score as compositeScore,
         best_model as bestModel,
+        repo_url as repoUrl,
         avg_tokens as avgTokens,
         avg_cost as avgCost,
         last_tested as lastTested,
@@ -192,8 +208,14 @@ apiRouter.get('/skill/:name', async (c) => {
     // Get result history
     const history = await c.env.DB.prepare(`
       SELECT
+        id,
         accuracy,
         model,
+        tokens_total as tokensTotal,
+        duration_ms as durationMs,
+        cost_usd as costUsd,
+        tool_count as toolCount,
+        security_score as securityScore,
         created_at as date
       FROM results
       WHERE skill_id = ?
@@ -202,8 +224,14 @@ apiRouter.get('/skill/:name', async (c) => {
     `).bind(skill.skillId).all();
 
     const formattedHistory = history.results?.map((row: Record<string, unknown>) => ({
+      id: row.id,
       accuracy: row.accuracy,
       model: row.model,
+      tokensTotal: row.tokensTotal ?? null,
+      durationMs: row.durationMs ?? null,
+      costUsd: row.costUsd ?? null,
+      toolCount: row.toolCount ?? null,
+      securityScore: row.securityScore ?? null,
       date: row.date ? new Date((row.date as number) * 1000).toISOString() : null,
     })) || [];
 
@@ -216,6 +244,28 @@ apiRouter.get('/skill/:name', async (c) => {
     });
   } catch (error) {
     console.error('Error fetching skill:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+/**
+ * GET /api/result/:id - Get full result detail (parsed raw_json)
+ */
+apiRouter.get('/result/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+
+    const result = await c.env.DB.prepare(`
+      SELECT raw_json FROM results WHERE id = ?
+    `).bind(id).first();
+
+    if (!result?.raw_json) {
+      return c.json({ error: 'Result not found or no detailed data available' }, 404);
+    }
+
+    return c.json(JSON.parse(result.raw_json as string));
+  } catch (error) {
+    console.error('Error fetching result detail:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
@@ -321,8 +371,8 @@ async function getSkillRank(db: D1Database, skillId: string): Promise<number | n
   const result = await db.prepare(`
     SELECT COUNT(*) + 1 as rank
     FROM leaderboard
-    WHERE best_accuracy > (
-      SELECT best_accuracy FROM leaderboard WHERE skill_id = ?
+    WHERE composite_score > (
+      SELECT composite_score FROM leaderboard WHERE skill_id = ?
     )
   `).bind(skillId).first();
 

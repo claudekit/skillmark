@@ -108,7 +108,7 @@ function validateResult(result: BenchmarkResult): void {
 }
 
 /**
- * Upload result to API
+ * Upload result to API with full metrics
  */
 async function uploadResult(
   result: BenchmarkResult,
@@ -116,6 +116,12 @@ async function uploadResult(
   endpoint: string
 ): Promise<{ leaderboardUrl?: string; rank?: number }> {
   const url = `${endpoint}/results`;
+
+  // Extract test files from result's test definitions
+  const testFiles = await extractTestFilesFromResult(result);
+
+  // Detect skill.sh link
+  const skillshLink = detectSkillshLink(result.skillSource);
 
   const response = await fetch(url, {
     method: 'POST',
@@ -131,12 +137,20 @@ async function uploadResult(
       model: result.model,
       accuracy: result.aggregatedMetrics.accuracy,
       tokensTotal: result.aggregatedMetrics.tokensTotal,
+      tokensInput: result.aggregatedMetrics.tokensInput,
+      tokensOutput: result.aggregatedMetrics.tokensOutput,
       durationMs: result.aggregatedMetrics.durationMs,
       costUsd: result.aggregatedMetrics.costUsd,
+      toolCount: result.aggregatedMetrics.toolCount,
       runs: result.runs,
       hash: result.hash,
       timestamp: result.timestamp,
       rawJson: JSON.stringify(result),
+      testFiles: testFiles.length > 0 ? testFiles : undefined,
+      skillshLink: skillshLink || undefined,
+      securityScore: result.securityScore?.securityScore ?? undefined,
+      securityJson: result.securityScore ? JSON.stringify(result.securityScore) : undefined,
+      repoUrl: result.repoUrl || undefined,
     }),
   });
 
@@ -146,6 +160,29 @@ async function uploadResult(
   }
 
   return response.json() as Promise<{ leaderboardUrl?: string; rank?: number }>;
+}
+
+/**
+ * Extract test files from result's test definitions (source paths)
+ */
+async function extractTestFilesFromResult(result: BenchmarkResult): Promise<TestFileUpload[]> {
+  const files: TestFileUpload[] = [];
+  const seen = new Set<string>();
+
+  for (const tr of result.testResults) {
+    const sourcePath = tr.test.sourcePath;
+    if (!sourcePath || seen.has(sourcePath)) continue;
+    seen.add(sourcePath);
+
+    try {
+      const content = await readFile(sourcePath, 'utf-8');
+      files.push({ name: basename(sourcePath), content });
+    } catch {
+      // File may not exist (result from different machine) — skip
+    }
+  }
+
+  return files;
 }
 
 /**
@@ -297,6 +334,9 @@ async function uploadResultWithExtras(
       rawJson: JSON.stringify(result),
       testFiles: testFiles.length > 0 ? testFiles : undefined,
       skillshLink: skillshLink || undefined,
+      securityScore: result.securityScore?.securityScore ?? undefined,
+      securityJson: result.securityScore ? JSON.stringify(result.securityScore) : undefined,
+      repoUrl: result.repoUrl || undefined,
     }),
   });
 

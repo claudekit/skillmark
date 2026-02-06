@@ -1,12 +1,31 @@
 /**
  * Core types for Skillmark benchmark system
  */
+/** Security test categories */
+export type SecurityCategory = 'prompt-injection' | 'jailbreak' | 'malware-gen' | 'data-exfiltration' | 'pii-leak' | 'harmful-content';
+/** Severity levels for security tests */
+export type SecuritySeverity = 'critical' | 'high' | 'medium';
+/** Security score from dual scoring model */
+export interface SecurityScore {
+    /** Percentage of expected refusal patterns matched (0-100) */
+    refusalRate: number;
+    /** Percentage of forbidden patterns found in response (0-100) */
+    leakageRate: number;
+    /** Combined score: refusalRate * (1 - leakageRate/100) */
+    securityScore: number;
+    /** Breakdown by security category */
+    categoryBreakdown: Partial<Record<SecurityCategory, {
+        refusalRate: number;
+        leakageRate: number;
+        testsRun: number;
+    }>>;
+}
 /** Test definition parsed from markdown frontmatter */
 export interface TestDefinition {
     /** Unique test identifier */
     name: string;
-    /** Type of test: knowledge (Q&A) or task (execution) */
-    type: 'knowledge' | 'task';
+    /** Type of test: knowledge (Q&A), task (execution), or security (adversarial) */
+    type: 'knowledge' | 'task' | 'security';
     /** Concepts to check in response */
     concepts: string[];
     /** Timeout in seconds */
@@ -17,6 +36,12 @@ export interface TestDefinition {
     expected: string[];
     /** Source file path */
     sourcePath: string;
+    /** Security test category (only for type: 'security') */
+    category?: SecurityCategory;
+    /** Security test severity (only for type: 'security') */
+    severity?: SecuritySeverity;
+    /** Patterns that must NOT appear in response (only for type: 'security') */
+    forbiddenPatterns?: string[];
 }
 /** Metrics collected from a single benchmark run */
 export interface BenchmarkMetrics {
@@ -74,6 +99,10 @@ export interface BenchmarkResult {
     version: string;
     /** Hash for result verification */
     hash?: string;
+    /** Security benchmark score (null if no security tests run) */
+    securityScore?: SecurityScore;
+    /** Git repository URL (auto-detected from skill directory) */
+    repoUrl?: string;
 }
 /** Skill source types */
 export type SkillSourceType = 'local' | 'git' | 'skillsh';
@@ -100,6 +129,23 @@ export interface RunOptions {
     output: string;
     /** Show verbose progress output */
     verbose?: boolean;
+    /** Force regenerate tests from SKILL.md even if tests/ exists */
+    generateTests?: boolean;
+    /** Additional prompt context to inject into test generation */
+    promptContext?: string;
+    /** Model to use for test generation (defaults to opus) */
+    generateModel?: 'haiku' | 'sonnet' | 'opus';
+    /** Run tests in parallel (concurrent Claude CLI processes) */
+    parallel?: boolean;
+}
+/** CLI generate-tests command options */
+export interface GenerateTestsOptions {
+    /** Model to use for test generation (defaults to opus) */
+    model: 'haiku' | 'sonnet' | 'opus';
+    /** Additional prompt context to inject into test generation */
+    promptContext?: string;
+    /** Output directory for generated tests (defaults to <skill>/tests) */
+    output?: string;
 }
 /** CLI publish command options */
 export interface PublishOptions {
@@ -138,5 +184,9 @@ export interface LeaderboardEntry {
     avgCost: number;
     lastTested: string;
     totalRuns: number;
+    /** Best security score (null if never tested) */
+    bestSecurity?: number;
+    /** Composite score: accuracy*0.80 + security*0.20 */
+    compositeScore?: number;
 }
 //# sourceMappingURL=benchmark-types.d.ts.map

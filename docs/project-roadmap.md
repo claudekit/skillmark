@@ -64,9 +64,10 @@ Phase 4: Scale & Polish  [░░░░░░░░░░░░░░] Planned
 ### Webapp Package (@skillmark/webapp)
 
 #### Sprint 1F: API Core
-- [ ] POST /api/results (submit benchmarks)
+- [ ] POST /api/results (submit benchmarks with full metrics)
+- [ ] GET /api/result/:id (full benchmark detail)
 - [ ] GET /api/leaderboard (paginated rankings)
-- [ ] GET /api/skill/:name (skill details)
+- [ ] GET /api/skill/:name (skill details with full metrics per result)
 - [ ] GET /api/verify (API key validation)
 - [ ] Error handling & validation
 - [ ] Request logging
@@ -80,7 +81,7 @@ Phase 4: Scale & Polish  [░░░░░░░░░░░░░░] Planned
 
 #### Sprint 1H: UI (Static)
 - [ ] Leaderboard page (rankings table)
-- [ ] Skill detail page
+- [ ] Skill detail page (radar chart, expandable results with per-test breakdown)
 - [ ] Filter by model (haiku/sonnet/opus)
 - [ ] Sort by accuracy/cost/speed
 - [ ] Responsive design (mobile)

@@ -124,7 +124,7 @@ Aggregate Results
     ↓
 Output (JSON + Markdown)
     ↓
-Optional: Publish to API
+Auto-publish to API (default, use --no-publish to skip)
 ```
 
 ---

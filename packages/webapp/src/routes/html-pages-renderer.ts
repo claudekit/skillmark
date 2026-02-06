@@ -16,6 +16,8 @@ interface LeaderboardRow {
   skillName: string;
   source: string;
   bestAccuracy: number;
+  bestSecurity: number | null;
+  compositeScore: number | null;
   bestModel: string;
   avgTokens: number;
   avgCost: number;
@@ -23,6 +25,7 @@ interface LeaderboardRow {
   totalRuns: number;
   submitterGithub?: string;
   skillshLink?: string;
+  repoUrl?: string;
 }
 
 /**
@@ -41,13 +44,16 @@ pagesRouter.get('/', async (c) => {
         l.skill_name as skillName,
         l.source,
         l.best_accuracy as bestAccuracy,
+        l.best_security as bestSecurity,
+        l.composite_score as compositeScore,
         l.best_model as bestModel,
         l.avg_tokens as avgTokens,
         l.avg_cost as avgCost,
         l.last_tested as lastTested,
         l.total_runs as totalRuns,
         (SELECT submitter_github FROM results WHERE skill_id = l.skill_id ORDER BY created_at DESC LIMIT 1) as submitterGithub,
-        (SELECT skillsh_link FROM results WHERE skill_id = l.skill_id AND skillsh_link IS NOT NULL ORDER BY created_at DESC LIMIT 1) as skillshLink
+        (SELECT skillsh_link FROM results WHERE skill_id = l.skill_id AND skillsh_link IS NOT NULL ORDER BY created_at DESC LIMIT 1) as skillshLink,
+        l.repo_url as repoUrl
       FROM leaderboard l
       LIMIT 50
     `).all();
@@ -89,6 +95,8 @@ pagesRouter.get('/skill/:name', async (c) => {
         l.skill_name as skillName,
         l.source,
         l.best_accuracy as bestAccuracy,
+        l.best_security as bestSecurity,
+        l.composite_score as compositeScore,
         l.best_model as bestModel,
         l.avg_tokens as avgTokens,
         l.avg_cost as avgCost,
@@ -105,10 +113,14 @@ pagesRouter.get('/skill/:name', async (c) => {
     // Get recent results with submitter info
     const results = await c.env.DB.prepare(`
       SELECT
+        r.id,
         r.accuracy,
         r.model,
         r.tokens_total as tokensTotal,
+        r.duration_ms as durationMs,
         r.cost_usd as costUsd,
+        r.tool_count as toolCount,
+        r.security_score as securityScore,
         r.created_at as createdAt,
         r.submitter_github as submitterGithub,
         r.skillsh_link as skillshLink,
@@ -119,16 +131,20 @@ pagesRouter.get('/skill/:name', async (c) => {
       LIMIT 20
     `).bind(skill.skillId).all();
 
-    const formattedResults = results.results?.map((r: Record<string, unknown>) => ({
-      accuracy: r.accuracy,
-      model: r.model,
-      tokensTotal: r.tokensTotal,
-      costUsd: r.costUsd,
+    const formattedResults: SkillResultRow[] = (results.results || []).map((r: Record<string, unknown>) => ({
+      id: r.id as string,
+      accuracy: r.accuracy as number,
+      model: r.model as string,
+      tokensTotal: r.tokensTotal as number,
+      durationMs: (r.durationMs as number) ?? null,
+      costUsd: r.costUsd as number,
+      toolCount: (r.toolCount as number) ?? null,
+      securityScore: (r.securityScore as number) ?? null,
       createdAt: r.createdAt ? new Date((r.createdAt as number) * 1000).toISOString() : null,
-      submitterGithub: r.submitterGithub,
-      skillshLink: r.skillshLink,
+      submitterGithub: r.submitterGithub as string | null,
+      skillshLink: r.skillshLink as string | null,
       testFiles: r.testFiles ? JSON.parse(r.testFiles as string) : null,
-    })) || [];
+    }));
 
     return c.html(renderSkillDetailPage(skill as unknown as LeaderboardRow, formattedResults));
   } catch (error) {
@@ -178,7 +194,7 @@ pagesRouter.get('/dashboard', async (c) => {
   `).bind(session.github_username).all();
 
   const formattedKeys = keys.results?.map((key: Record<string, unknown>) => ({
-    id: key.id,
+    id: key.id as string,
     createdAt: key.created_at ? new Date((key.created_at as number) * 1000).toISOString() : null,
     lastUsedAt: key.last_used_at ? new Date((key.last_used_at as number) * 1000).toISOString() : null,
   })) || [];
@@ -272,6 +288,11 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
   const rows = entries.map((entry, index) => {
     const rank = index + 1;
     const accuracy = entry.bestAccuracy.toFixed(1);
+    const security = entry.bestSecurity != null ? `${entry.bestSecurity.toFixed(0)}%` : '\u2014';
+    const composite = entry.compositeScore != null ? `${entry.compositeScore.toFixed(1)}%` : '\u2014';
+    const securityWarning = entry.bestSecurity != null && entry.bestSecurity < 50
+      ? '<span class="security-warning" title="Low security score">\u25CF</span> '
+      : '';
     const source = entry.source || '';
     const repoPath = source.replace('https://github.com/', '').replace(/\.git$/, '');
     const submitter = entry.submitterGithub;
@@ -285,6 +306,7 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
             <span class="skill-name">${escapeHtml(entry.skillName)}</span>
             ${repoPath ? `<span class="skill-repo">${escapeHtml(repoPath)}</span>` : ''}
             ${skillshLink ? `<a href="${escapeHtml(skillshLink)}" class="skillsh-link" onclick="event.stopPropagation()">skill.sh</a>` : ''}
+            ${entry.repoUrl ? `<a href="${escapeHtml(entry.repoUrl)}" class="repo-link" onclick="event.stopPropagation()" title="View repository">repo</a>` : ''}
           </div>
         </td>
         <td class="submitter">
@@ -295,6 +317,8 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
             </a>
           ` : '<span class="no-submitter">-</span>'}
         </td>
+        <td class="security">${securityWarning}${security}</td>
+        <td class="composite">${composite}</td>
         <td class="accuracy">${accuracy}%</td>
       </tr>
     `;
@@ -678,8 +702,15 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
       text-decoration: none;
     }
 
-    .skillsh-link:hover {
+    .skillsh-link:hover, .repo-link:hover {
       text-decoration: underline;
+    }
+
+    .repo-link {
+      font-size: 0.75rem;
+      color: #8b949e;
+      text-decoration: none;
+      margin-left: 0.25rem;
     }
 
     .submitter {
@@ -713,6 +744,33 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
       text-align: right;
       font-family: 'Geist Mono', monospace;
       font-weight: 500;
+    }
+
+    .security {
+      text-align: right;
+      font-family: 'Geist Mono', monospace;
+      color: var(--text-secondary);
+    }
+
+    .composite {
+      text-align: right;
+      font-family: 'Geist Mono', monospace;
+      font-weight: 500;
+    }
+
+    .security-warning {
+      color: #d29922;
+      font-size: 0.625rem;
+    }
+
+    .security-banner {
+      background: rgba(210, 153, 34, 0.1);
+      border: 1px solid rgba(210, 153, 34, 0.3);
+      color: #d29922;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      font-size: 0.875rem;
     }
 
     /* Empty state */
@@ -857,6 +915,8 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
             <th>#</th>
             <th>Skill</th>
             <th>Submitter</th>
+            <th>Security</th>
+            <th>Composite</th>
             <th>Accuracy</th>
           </tr>
         </thead>
@@ -1080,6 +1140,7 @@ function renderHowItWorksPage(): string {
       <table>
         <tr><td><code>knowledge</code></td><td>Q&A style tests checking if response covers expected concepts</td></tr>
         <tr><td><code>task</code></td><td>Execution tests verifying tool usage and task completion</td></tr>
+        <tr><td><code>security</code></td><td>Security tests checking refusal of malicious prompts and absence of forbidden content</td></tr>
       </table>
     </section>
 
@@ -1181,6 +1242,47 @@ function renderHowItWorksPage(): string {
     </section>
 
     <section class="doc-section">
+      <h2>Security & Composite Scoring</h2>
+      <p>Security tests use a dual scoring model:</p>
+      <ul>
+        <li><strong>Refusal Rate</strong> - % of expected refusal patterns matched (higher is better)</li>
+        <li><strong>Leakage Rate</strong> - % of forbidden patterns found in response (lower is better)</li>
+        <li><strong>Security Score</strong> = refusalRate × (1 - leakageRate / 100)</li>
+      </ul>
+      <p>The <strong>composite score</strong> used for leaderboard ranking:</p>
+      <pre><code>composite = accuracy × 0.80 + securityScore × 0.20</code></pre>
+      <p>This weights functional correctness (80%) higher while still rewarding security (20%).</p>
+    </section>
+
+    <section class="doc-section">
+      <h2>CLI Commands</h2>
+      <table>
+        <tr><td><code>skillmark run &lt;skill&gt;</code></td><td>Run benchmark against a skill</td></tr>
+        <tr><td><code>skillmark generate-tests &lt;skill&gt;</code></td><td>Generate test files from SKILL.md without running benchmarks</td></tr>
+        <tr><td><code>skillmark publish &lt;result&gt;</code></td><td>Upload results to leaderboard</td></tr>
+        <tr><td><code>skillmark auth</code></td><td>Setup Claude CLI authentication</td></tr>
+        <tr><td><code>skillmark login &lt;key&gt;</code></td><td>Save API key for publishing</td></tr>
+        <tr><td><code>skillmark leaderboard</code></td><td>View skill rankings</td></tr>
+      </table>
+      <h3>Key Run Options</h3>
+      <table>
+        <tr><td><code>-m, --model</code></td><td>Model to use (haiku|sonnet|opus, default: opus)</td></tr>
+        <tr><td><code>-g, --generate-tests</code></td><td>Force regenerate tests from SKILL.md</td></tr>
+        <tr><td><code>-c, --prompt-context</code></td><td>Additional prompt for test generation</td></tr>
+        <tr><td><code>--parallel</code></td><td>Run tests in parallel</td></tr>
+        <tr><td><code>--generate-model</code></td><td>Model for test generation (default: opus)</td></tr>
+        <tr><td><code>-r, --runs</code></td><td>Number of iterations (default: 3)</td></tr>
+      </table>
+      <p>All test timeouts are automatically doubled (2x) to give agent skills adequate execution time.</p>
+    </section>
+
+    <section class="doc-section">
+      <h2>Git Repository Detection</h2>
+      <p>Skillmark auto-detects the git remote URL from skill directories and includes it in benchmark results.
+      This URL is displayed on the leaderboard, linking directly to the skill's source repository.</p>
+    </section>
+
+    <section class="doc-section">
       <h2>Error Handling</h2>
       <p>Skillmark uses retry-then-degrade pattern for robustness:</p>
       <table>
@@ -1263,14 +1365,108 @@ function renderDocLayout(title: string, content: string): string {
 
 /** Result row for skill detail page */
 interface SkillResultRow {
+  id: string;
   accuracy: number;
   model: string;
   tokensTotal: number;
+  durationMs: number | null;
   costUsd: number;
+  toolCount: number | null;
+  securityScore: number | null;
   createdAt: string | null;
   submitterGithub: string | null;
   skillshLink: string | null;
   testFiles: Array<{ name: string; content: string }> | null;
+}
+
+/** Normalized radar chart metrics (all 0-100) */
+interface RadarMetrics {
+  accuracy: number;
+  security: number;
+  tokenEfficiency: number;
+  costEfficiency: number;
+  speed: number;
+}
+
+/**
+ * Compute normalized radar metrics from skill data and results
+ */
+function computeRadarMetrics(skill: LeaderboardRow, results: SkillResultRow[]): RadarMetrics {
+  const durResults = results.filter(r => r.durationMs != null && r.durationMs > 0);
+  const avgDuration = durResults.length > 0
+    ? durResults.reduce((s, r) => s + (r.durationMs as number), 0) / durResults.length
+    : 0;
+
+  return {
+    accuracy: Math.max(0, Math.min(100, skill.bestAccuracy)),
+    security: Math.max(0, Math.min(100, skill.bestSecurity ?? 0)),
+    // 0 tokens = 100, 10K+ tokens = 0
+    tokenEfficiency: Math.max(0, Math.min(100, 100 - (skill.avgTokens / 10000) * 100)),
+    // $0 = 100, $0.10+ = 0
+    costEfficiency: Math.max(0, Math.min(100, 100 - (skill.avgCost / 0.10) * 100)),
+    // 0s = 100, 60s+ = 0
+    speed: Math.max(0, Math.min(100, 100 - (avgDuration / 60000) * 100)),
+  };
+}
+
+/**
+ * Render SVG radar chart for performance profile
+ */
+function renderRadarChart(metrics: RadarMetrics): string {
+  const cx = 180, cy = 160, maxR = 110;
+  const labels = ['Accuracy', 'Security', 'Tokens', 'Cost', 'Speed'];
+  const values = [metrics.accuracy, metrics.security, metrics.tokenEfficiency, metrics.costEfficiency, metrics.speed];
+
+  // 5 axes, starting from top (-90°), clockwise
+  const angles = labels.map((_, i) => (-90 + i * 72) * Math.PI / 180);
+
+  function point(angle: number, r: number): string {
+    return `${(cx + r * Math.cos(angle)).toFixed(1)},${(cy + r * Math.sin(angle)).toFixed(1)}`;
+  }
+
+  function polygon(r: number): string {
+    return angles.map(a => point(a, r)).join(' ');
+  }
+
+  // Grid lines (25%, 50%, 75%, 100%)
+  const gridLines = [0.25, 0.5, 0.75, 1.0].map(pct =>
+    `<polygon points="${polygon(maxR * pct)}" fill="none" stroke="#333" stroke-width="0.5"/>`
+  ).join('');
+
+  // Axis lines
+  const axisLines = angles.map(a =>
+    `<line x1="${cx}" y1="${cy}" x2="${point(a, maxR).split(',')[0]}" y2="${point(a, maxR).split(',')[1]}" stroke="#333" stroke-width="0.5"/>`
+  ).join('');
+
+  // Data polygon
+  const dataPoints = values.map((v, i) => point(angles[i], (v / 100) * maxR));
+  const dataPolygon = `<polygon points="${dataPoints.join(' ')}" fill="rgba(88,166,255,0.15)" stroke="#58a6ff" stroke-width="1.5"/>`;
+
+  // Data dots
+  const dataDots = dataPoints.map(p => {
+    const [x, y] = p.split(',');
+    return `<circle cx="${x}" cy="${y}" r="3" fill="#58a6ff"/>`;
+  }).join('');
+
+  // Labels with values
+  const labelOffset = 24;
+  const labelElements = labels.map((label, i) => {
+    const angle = angles[i];
+    const lx = cx + (maxR + labelOffset) * Math.cos(angle);
+    const ly = cy + (maxR + labelOffset) * Math.sin(angle);
+    const anchor = Math.abs(lx - cx) < 5 ? 'middle' : lx > cx ? 'start' : 'end';
+    const val = values[i].toFixed(0);
+    return `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" class="radar-label">${label}</text>
+            <text x="${lx.toFixed(1)}" y="${(ly + 13).toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" class="radar-value">${val}</text>`;
+  }).join('\n    ');
+
+  return `<svg viewBox="0 0 360 340" xmlns="http://www.w3.org/2000/svg">
+    ${gridLines}
+    ${axisLines}
+    ${dataPolygon}
+    ${dataDots}
+    ${labelElements}
+  </svg>`;
 }
 
 /**
@@ -1280,21 +1476,29 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
   const latestResult = results[0];
   const skillshLink = latestResult?.skillshLink || skill.skillshLink;
 
+  // Compute radar chart metrics
+  const radarMetrics = computeRadarMetrics(skill, results);
+  const radarSvg = renderRadarChart(radarMetrics);
+
   const resultRows = results.map((r, i) => `
-    <tr>
+    <tr class="result-row" data-result-id="${escapeHtml(r.id)}">
       <td class="result-date">${r.createdAt ? formatRelativeTime(new Date(r.createdAt).getTime() / 1000) : '-'}</td>
       <td class="result-model">${escapeHtml(r.model)}</td>
       <td class="result-accuracy">${r.accuracy.toFixed(1)}%</td>
+      <td class="result-security">${r.securityScore != null ? r.securityScore.toFixed(0) + '%' : '\u2014'}</td>
       <td class="result-tokens">${r.tokensTotal?.toLocaleString() || '-'}</td>
       <td class="result-cost">$${r.costUsd?.toFixed(4) || '-'}</td>
       <td class="result-submitter">
         ${r.submitterGithub ? `
-          <a href="https://github.com/${escapeHtml(r.submitterGithub)}" class="submitter-link">
+          <a href="https://github.com/${escapeHtml(r.submitterGithub)}" class="submitter-link" onclick="event.stopPropagation()">
             <img src="https://github.com/${escapeHtml(r.submitterGithub)}.png?size=20" alt="" class="submitter-avatar-sm">
             @${escapeHtml(r.submitterGithub)}
           </a>
         ` : '-'}
       </td>
+    </tr>
+    <tr class="result-detail" data-result-id="${escapeHtml(r.id)}">
+      <td colspan="7"><span class="detail-placeholder">Loading...</span></td>
     </tr>
   `).join('');
 
@@ -1341,7 +1545,7 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
     .skill-meta { display: flex; gap: 1.5rem; color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 2rem; }
     .skill-meta a { color: #58a6ff; text-decoration: none; }
     .skill-meta a:hover { text-decoration: underline; }
-    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 3rem; }
+    .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.5rem; margin-bottom: 3rem; }
     .stat-card { background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
     .stat-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); margin-bottom: 0.5rem; }
     .stat-value { font-family: 'Geist Mono', monospace; font-size: 1.5rem; font-weight: 500; }
@@ -1351,10 +1555,42 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
     .results-table th { text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); font-weight: 500; padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
     .results-table td { padding: 0.75rem 0; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
     .result-accuracy { font-family: 'Geist Mono', monospace; font-weight: 500; }
+    .result-security { font-family: 'Geist Mono', monospace; color: var(--text-secondary); }
     .result-tokens, .result-cost { font-family: 'Geist Mono', monospace; color: var(--text-secondary); }
+    .security-warning { color: #d29922; font-size: 0.625rem; }
+    .security-banner { background: rgba(210, 153, 34, 0.1); border: 1px solid rgba(210, 153, 34, 0.3); color: #d29922; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; font-size: 0.875rem; }
     .submitter-link { display: flex; align-items: center; gap: 0.375rem; color: var(--text-secondary); text-decoration: none; font-size: 0.8125rem; }
     .submitter-link:hover { color: var(--text); }
     .submitter-avatar-sm { width: 16px; height: 16px; border-radius: 50%; }
+    .radar-section { margin-bottom: 3rem; }
+    .radar-container { display: flex; justify-content: center; padding: 1rem 0; }
+    .radar-container svg { max-width: 350px; width: 100%; }
+    .radar-label { font-family: 'Geist', -apple-system, sans-serif; font-size: 11px; fill: #888; }
+    .radar-value { font-family: 'Geist Mono', monospace; font-size: 10px; fill: #ededed; }
+    .result-row { cursor: pointer; transition: background 0.15s; }
+    .result-row:hover td { background: #111; }
+    .result-row .result-date::before { content: ''; display: inline-block; width: 0; height: 0; border-left: 4px solid var(--text-secondary); border-top: 3px solid transparent; border-bottom: 3px solid transparent; margin-right: 0.5rem; transition: transform 0.2s; }
+    .result-row.expanded .result-date::before { transform: rotate(90deg); }
+    .result-detail { display: none; }
+    .result-detail.active { display: table-row; }
+    .result-detail td { padding: 1rem 0; background: #0a0a0a; border-bottom: 1px solid var(--border); }
+    .detail-placeholder { color: var(--text-secondary); font-size: 0.875rem; }
+    .detail-content { padding: 0.5rem; }
+    .detail-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+    .detail-metric { text-align: center; }
+    .detail-metric-label { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); }
+    .detail-metric-value { font-family: 'Geist Mono', monospace; font-size: 1.125rem; font-weight: 500; }
+    .test-breakdown-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); margin-bottom: 0.75rem; }
+    .test-breakdown { display: grid; gap: 0.5rem; }
+    .test-item { border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; background: #000; }
+    .test-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem; }
+    .test-item-name { font-weight: 500; font-size: 0.875rem; }
+    .test-item-type { font-size: 0.6875rem; text-transform: uppercase; padding: 0.125rem 0.5rem; border-radius: 4px; border: 1px solid var(--border); color: var(--text-secondary); }
+    .test-item-stats { font-family: 'Geist Mono', monospace; font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 0.375rem; }
+    .test-concepts { font-size: 0.8125rem; line-height: 1.5; }
+    .concept-matched { color: #3fb950; }
+    .concept-missed { color: #d29922; }
+    .detail-empty { color: var(--text-secondary); font-size: 0.875rem; font-style: italic; padding: 1rem; text-align: center; }
     .test-files-section { background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
     .test-files-section h2 { margin-bottom: 1rem; }
     .test-files-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
@@ -1367,7 +1603,7 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
     footer { margin-top: 3rem; padding: 2rem 0; border-top: 1px solid var(--border); text-align: center; color: var(--text-secondary); font-size: 0.8125rem; }
     footer a { color: var(--text); text-decoration: none; }
     @media (max-width: 768px) {
-      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
       .results-table { font-size: 0.8125rem; }
     }
   </style>
@@ -1403,6 +1639,10 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
         <div class="stat-value">${skill.bestAccuracy.toFixed(1)}%</div>
       </div>
       <div class="stat-card">
+        <div class="stat-label">Security</div>
+        <div class="stat-value">${skill.bestSecurity != null ? skill.bestSecurity.toFixed(0) + '%' : '\u2014'}</div>
+      </div>
+      <div class="stat-card">
         <div class="stat-label">Best Model</div>
         <div class="stat-value">${escapeHtml(skill.bestModel)}</div>
       </div>
@@ -1416,14 +1656,23 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
       </div>
     </div>
 
+    <section class="section radar-section">
+      <h2>Performance Profile</h2>
+      <div class="radar-container">
+        ${radarSvg}
+      </div>
+    </section>
+
     <section class="section">
       <h2>Result History</h2>
+      <p style="color: var(--text-secondary); font-size: 0.8125rem; margin-bottom: 1rem;">Click a row to view detailed test breakdown</p>
       <table class="results-table">
         <thead>
           <tr>
             <th>Date</th>
             <th>Model</th>
             <th>Accuracy</th>
+            <th>Security</th>
             <th>Tokens</th>
             <th>Cost</th>
             <th>Submitter</th>
@@ -1434,6 +1683,32 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
         </tbody>
       </table>
     </section>
+
+    ${skill.bestSecurity != null ? `
+    <section class="section">
+      <h2>Security Benchmark</h2>
+      ${skill.bestSecurity < 50 ? `
+        <div class="security-banner">
+          <span class="security-warning">\u25CF</span>
+          This skill has a low security score. Consider running security benchmarks to identify vulnerabilities.
+        </div>
+      ` : ''}
+      <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
+        <div class="stat-card">
+          <div class="stat-label">Security Score</div>
+          <div class="stat-value">${skill.bestSecurity.toFixed(1)}%</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Composite Score</div>
+          <div class="stat-value">${skill.compositeScore?.toFixed(1) || '\u2014'}%</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Accuracy</div>
+          <div class="stat-value">${skill.bestAccuracy.toFixed(1)}%</div>
+        </div>
+      </div>
+    </section>
+    ` : ''}
 
     ${testFilesSection}
 
@@ -1451,6 +1726,99 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
         document.querySelectorAll('.test-file-content').forEach(c => c.classList.remove('active'));
         tab.classList.add('active');
         document.querySelector('.test-file-content[data-index="' + index + '"]').classList.add('active');
+      });
+    });
+
+    // Result row expand/collapse
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    function renderTestBreakdown(data) {
+      if (!data || !data.testResults || data.testResults.length === 0) {
+        return '<div class="detail-empty">Detailed breakdown not available</div>';
+      }
+      const m = data.aggregatedMetrics || {};
+      let html = '<div class="detail-content">';
+      html += '<div class="detail-metrics">';
+      html += '<div class="detail-metric"><div class="detail-metric-label">Accuracy</div><div class="detail-metric-value">' + (m.accuracy != null ? m.accuracy.toFixed(1) + '%' : '-') + '</div></div>';
+      html += '<div class="detail-metric"><div class="detail-metric-label">Tokens</div><div class="detail-metric-value">' + (m.tokensTotal != null ? m.tokensTotal.toLocaleString() : '-') + '</div></div>';
+      html += '<div class="detail-metric"><div class="detail-metric-label">Duration</div><div class="detail-metric-value">' + (m.durationMs != null ? (m.durationMs / 1000).toFixed(1) + 's' : '-') + '</div></div>';
+      html += '<div class="detail-metric"><div class="detail-metric-label">Cost</div><div class="detail-metric-value">$' + (m.costUsd != null ? m.costUsd.toFixed(4) : '-') + '</div></div>';
+      html += '<div class="detail-metric"><div class="detail-metric-label">Tools</div><div class="detail-metric-value">' + (m.toolCount != null ? m.toolCount : '-') + '</div></div>';
+      html += '</div>';
+
+      // Group by test name
+      const byTest = {};
+      data.testResults.forEach(function(tr) {
+        const name = tr.test ? tr.test.name : 'Unknown';
+        if (!byTest[name]) byTest[name] = [];
+        byTest[name].push(tr);
+      });
+
+      html += '<div class="test-breakdown-title">Test Results (' + data.testResults.length + ')</div>';
+      html += '<div class="test-breakdown">';
+      Object.keys(byTest).forEach(function(name) {
+        const runs = byTest[name];
+        const avgAcc = runs.reduce(function(s, r) { return s + (r.metrics ? r.metrics.accuracy : 0); }, 0) / runs.length;
+        const first = runs[0];
+        const type = first.test ? first.test.type : '';
+        const tokens = first.metrics ? first.metrics.tokensTotal : 0;
+        const dur = first.metrics ? (first.metrics.durationMs / 1000).toFixed(1) : '-';
+        const cost = first.metrics ? first.metrics.costUsd.toFixed(4) : '-';
+        const matched = first.matchedConcepts || [];
+        const missed = first.missedConcepts || [];
+
+        html += '<div class="test-item">';
+        html += '<div class="test-item-header"><span class="test-item-name">' + esc(name) + '</span><span class="test-item-type">' + esc(type) + '</span></div>';
+        html += '<div class="test-item-stats">' + avgAcc.toFixed(1) + '% accuracy · ' + tokens.toLocaleString() + ' tokens · ' + dur + 's · $' + cost;
+        if (runs.length > 1) html += ' · ' + runs.length + ' runs';
+        html += '</div>';
+        if (matched.length > 0 || missed.length > 0) {
+          html += '<div class="test-concepts">';
+          if (matched.length > 0) html += '<span class="concept-matched">Matched: ' + matched.map(esc).join(', ') + '</span>';
+          if (matched.length > 0 && missed.length > 0) html += '<br>';
+          if (missed.length > 0) html += '<span class="concept-missed">Missed: ' + missed.map(esc).join(', ') + '</span>';
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+      html += '</div></div>';
+      return html;
+    }
+
+    document.querySelectorAll('.result-row').forEach(function(row) {
+      row.addEventListener('click', async function() {
+        const id = row.dataset.resultId;
+        const detail = document.querySelector('.result-detail[data-result-id="' + id + '"]');
+        if (!detail) return;
+
+        // Toggle: if already active, collapse
+        if (detail.classList.contains('active')) {
+          detail.classList.remove('active');
+          row.classList.remove('expanded');
+          return;
+        }
+
+        // Collapse any other open detail
+        document.querySelectorAll('.result-detail.active').forEach(function(d) { d.classList.remove('active'); });
+        document.querySelectorAll('.result-row.expanded').forEach(function(r) { r.classList.remove('expanded'); });
+
+        row.classList.add('expanded');
+        detail.classList.add('active');
+
+        // Fetch if not already loaded
+        if (!detail.dataset.loaded) {
+          detail.querySelector('td').innerHTML = '<span class="detail-placeholder">Loading...</span>';
+          try {
+            const res = await fetch('/api/result/' + encodeURIComponent(id));
+            if (!res.ok) throw new Error('Not found');
+            const data = await res.json();
+            detail.querySelector('td').innerHTML = renderTestBreakdown(data);
+            detail.dataset.loaded = '1';
+          } catch (e) {
+            detail.querySelector('td').innerHTML = '<div class="detail-empty">Detailed breakdown not available</div>';
+            detail.dataset.loaded = '1';
+          }
+        }
       });
     });
   </script>

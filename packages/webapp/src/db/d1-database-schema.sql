@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS results (
   runs INTEGER NOT NULL,
   hash TEXT NOT NULL,
   raw_json TEXT,
+  security_score REAL,
+  security_json TEXT,
+  repo_url TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
@@ -46,13 +49,15 @@ CREATE INDEX IF NOT EXISTS idx_results_created_at ON results(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
 CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 
--- View for leaderboard (best result per skill)
+-- View for leaderboard (best result per skill, composite scoring)
 CREATE VIEW IF NOT EXISTS leaderboard AS
 SELECT
   s.id as skill_id,
   s.name as skill_name,
   s.source,
   MAX(r.accuracy) as best_accuracy,
+  MAX(r.security_score) as best_security,
+  (MAX(r.accuracy) * 0.80 + COALESCE(MAX(r.security_score), 0) * 0.20) as composite_score,
   (SELECT model FROM results WHERE skill_id = s.id ORDER BY accuracy DESC LIMIT 1) as best_model,
   AVG(r.tokens_total) as avg_tokens,
   AVG(r.cost_usd) as avg_cost,
@@ -61,4 +66,4 @@ SELECT
 FROM skills s
 JOIN results r ON r.skill_id = s.id
 GROUP BY s.id
-ORDER BY best_accuracy DESC;
+ORDER BY composite_score DESC;
