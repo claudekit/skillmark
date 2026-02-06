@@ -111,10 +111,13 @@ pagesRouter.get('/skill/:name', async (c) => {
     // Get recent results with submitter info
     const results = await c.env.DB.prepare(`
       SELECT
+        r.id,
         r.accuracy,
         r.model,
         r.tokens_total as tokensTotal,
+        r.duration_ms as durationMs,
         r.cost_usd as costUsd,
+        r.tool_count as toolCount,
         r.security_score as securityScore,
         r.created_at as createdAt,
         r.submitter_github as submitterGithub,
@@ -126,17 +129,20 @@ pagesRouter.get('/skill/:name', async (c) => {
       LIMIT 20
     `).bind(skill.skillId).all();
 
-    const formattedResults = results.results?.map((r: Record<string, unknown>) => ({
-      accuracy: r.accuracy,
-      model: r.model,
-      tokensTotal: r.tokensTotal,
-      costUsd: r.costUsd,
-      securityScore: r.securityScore ?? null,
+    const formattedResults: SkillResultRow[] = (results.results || []).map((r: Record<string, unknown>) => ({
+      id: r.id as string,
+      accuracy: r.accuracy as number,
+      model: r.model as string,
+      tokensTotal: r.tokensTotal as number,
+      durationMs: (r.durationMs as number) ?? null,
+      costUsd: r.costUsd as number,
+      toolCount: (r.toolCount as number) ?? null,
+      securityScore: (r.securityScore as number) ?? null,
       createdAt: r.createdAt ? new Date((r.createdAt as number) * 1000).toISOString() : null,
-      submitterGithub: r.submitterGithub,
-      skillshLink: r.skillshLink,
+      submitterGithub: r.submitterGithub as string | null,
+      skillshLink: r.skillshLink as string | null,
       testFiles: r.testFiles ? JSON.parse(r.testFiles as string) : null,
-    })) || [];
+    }));
 
     return c.html(renderSkillDetailPage(skill as unknown as LeaderboardRow, formattedResults));
   } catch (error) {
@@ -186,7 +192,7 @@ pagesRouter.get('/dashboard', async (c) => {
   `).bind(session.github_username).all();
 
   const formattedKeys = keys.results?.map((key: Record<string, unknown>) => ({
-    id: key.id,
+    id: key.id as string,
     createdAt: key.created_at ? new Date((key.created_at as number) * 1000).toISOString() : null,
     lastUsedAt: key.last_used_at ? new Date((key.last_used_at as number) * 1000).toISOString() : null,
   })) || [];
@@ -1308,15 +1314,108 @@ function renderDocLayout(title: string, content: string): string {
 
 /** Result row for skill detail page */
 interface SkillResultRow {
+  id: string;
   accuracy: number;
   model: string;
   tokensTotal: number;
+  durationMs: number | null;
   costUsd: number;
+  toolCount: number | null;
   securityScore: number | null;
   createdAt: string | null;
   submitterGithub: string | null;
   skillshLink: string | null;
   testFiles: Array<{ name: string; content: string }> | null;
+}
+
+/** Normalized radar chart metrics (all 0-100) */
+interface RadarMetrics {
+  accuracy: number;
+  security: number;
+  tokenEfficiency: number;
+  costEfficiency: number;
+  speed: number;
+}
+
+/**
+ * Compute normalized radar metrics from skill data and results
+ */
+function computeRadarMetrics(skill: LeaderboardRow, results: SkillResultRow[]): RadarMetrics {
+  const durResults = results.filter(r => r.durationMs != null && r.durationMs > 0);
+  const avgDuration = durResults.length > 0
+    ? durResults.reduce((s, r) => s + (r.durationMs as number), 0) / durResults.length
+    : 0;
+
+  return {
+    accuracy: Math.max(0, Math.min(100, skill.bestAccuracy)),
+    security: Math.max(0, Math.min(100, skill.bestSecurity ?? 0)),
+    // 0 tokens = 100, 10K+ tokens = 0
+    tokenEfficiency: Math.max(0, Math.min(100, 100 - (skill.avgTokens / 10000) * 100)),
+    // $0 = 100, $0.10+ = 0
+    costEfficiency: Math.max(0, Math.min(100, 100 - (skill.avgCost / 0.10) * 100)),
+    // 0s = 100, 60s+ = 0
+    speed: Math.max(0, Math.min(100, 100 - (avgDuration / 60000) * 100)),
+  };
+}
+
+/**
+ * Render SVG radar chart for performance profile
+ */
+function renderRadarChart(metrics: RadarMetrics): string {
+  const cx = 150, cy = 150, maxR = 110;
+  const labels = ['Accuracy', 'Security', 'Tokens', 'Cost', 'Speed'];
+  const values = [metrics.accuracy, metrics.security, metrics.tokenEfficiency, metrics.costEfficiency, metrics.speed];
+
+  // 5 axes, starting from top (-90°), clockwise
+  const angles = labels.map((_, i) => (-90 + i * 72) * Math.PI / 180);
+
+  function point(angle: number, r: number): string {
+    return `${(cx + r * Math.cos(angle)).toFixed(1)},${(cy + r * Math.sin(angle)).toFixed(1)}`;
+  }
+
+  function polygon(r: number): string {
+    return angles.map(a => point(a, r)).join(' ');
+  }
+
+  // Grid lines (25%, 50%, 75%, 100%)
+  const gridLines = [0.25, 0.5, 0.75, 1.0].map(pct =>
+    `<polygon points="${polygon(maxR * pct)}" fill="none" stroke="#333" stroke-width="0.5"/>`
+  ).join('');
+
+  // Axis lines
+  const axisLines = angles.map(a =>
+    `<line x1="${cx}" y1="${cy}" x2="${point(a, maxR).split(',')[0]}" y2="${point(a, maxR).split(',')[1]}" stroke="#333" stroke-width="0.5"/>`
+  ).join('');
+
+  // Data polygon
+  const dataPoints = values.map((v, i) => point(angles[i], (v / 100) * maxR));
+  const dataPolygon = `<polygon points="${dataPoints.join(' ')}" fill="rgba(88,166,255,0.15)" stroke="#58a6ff" stroke-width="1.5"/>`;
+
+  // Data dots
+  const dataDots = dataPoints.map(p => {
+    const [x, y] = p.split(',');
+    return `<circle cx="${x}" cy="${y}" r="3" fill="#58a6ff"/>`;
+  }).join('');
+
+  // Labels with values
+  const labelOffset = 24;
+  const labelElements = labels.map((label, i) => {
+    const angle = angles[i];
+    const lx = cx + (maxR + labelOffset) * Math.cos(angle);
+    const ly = cy + (maxR + labelOffset) * Math.sin(angle);
+    const anchor = Math.abs(lx - cx) < 5 ? 'middle' : lx > cx ? 'start' : 'end';
+    const val = values[i].toFixed(0);
+    return `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" class="radar-label">${label}</text>
+            <text x="${lx.toFixed(1)}" y="${(ly + 13).toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" class="radar-value">${val}</text>`;
+  }).join('\n    ');
+
+  return `<svg viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
+    ${gridLines}
+    ${axisLines}
+    ${dataPolygon}
+    ${dataDots}
+    ${labelElements}
+  </svg>`;
 }
 
 /**
@@ -1326,8 +1425,12 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
   const latestResult = results[0];
   const skillshLink = latestResult?.skillshLink || skill.skillshLink;
 
+  // Compute radar chart metrics
+  const radarMetrics = computeRadarMetrics(skill, results);
+  const radarSvg = renderRadarChart(radarMetrics);
+
   const resultRows = results.map((r, i) => `
-    <tr>
+    <tr class="result-row" data-result-id="${escapeHtml(r.id)}">
       <td class="result-date">${r.createdAt ? formatRelativeTime(new Date(r.createdAt).getTime() / 1000) : '-'}</td>
       <td class="result-model">${escapeHtml(r.model)}</td>
       <td class="result-accuracy">${r.accuracy.toFixed(1)}%</td>
@@ -1336,12 +1439,15 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
       <td class="result-cost">$${r.costUsd?.toFixed(4) || '-'}</td>
       <td class="result-submitter">
         ${r.submitterGithub ? `
-          <a href="https://github.com/${escapeHtml(r.submitterGithub)}" class="submitter-link">
+          <a href="https://github.com/${escapeHtml(r.submitterGithub)}" class="submitter-link" onclick="event.stopPropagation()">
             <img src="https://github.com/${escapeHtml(r.submitterGithub)}.png?size=20" alt="" class="submitter-avatar-sm">
             @${escapeHtml(r.submitterGithub)}
           </a>
         ` : '-'}
       </td>
+    </tr>
+    <tr class="result-detail" data-result-id="${escapeHtml(r.id)}">
+      <td colspan="7"><span class="detail-placeholder">Loading...</span></td>
     </tr>
   `).join('');
 
@@ -1405,6 +1511,35 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
     .submitter-link { display: flex; align-items: center; gap: 0.375rem; color: var(--text-secondary); text-decoration: none; font-size: 0.8125rem; }
     .submitter-link:hover { color: var(--text); }
     .submitter-avatar-sm { width: 16px; height: 16px; border-radius: 50%; }
+    .radar-section { margin-bottom: 3rem; }
+    .radar-container { display: flex; justify-content: center; padding: 1rem 0; }
+    .radar-container svg { max-width: 350px; width: 100%; }
+    .radar-label { font-family: 'Geist', -apple-system, sans-serif; font-size: 11px; fill: #888; }
+    .radar-value { font-family: 'Geist Mono', monospace; font-size: 10px; fill: #ededed; }
+    .result-row { cursor: pointer; transition: background 0.15s; }
+    .result-row:hover td { background: #111; }
+    .result-row .result-date::before { content: ''; display: inline-block; width: 0; height: 0; border-left: 4px solid var(--text-secondary); border-top: 3px solid transparent; border-bottom: 3px solid transparent; margin-right: 0.5rem; transition: transform 0.2s; }
+    .result-row.expanded .result-date::before { transform: rotate(90deg); }
+    .result-detail { display: none; }
+    .result-detail.active { display: table-row; }
+    .result-detail td { padding: 1rem 0; background: #0a0a0a; border-bottom: 1px solid var(--border); }
+    .detail-placeholder { color: var(--text-secondary); font-size: 0.875rem; }
+    .detail-content { padding: 0.5rem; }
+    .detail-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+    .detail-metric { text-align: center; }
+    .detail-metric-label { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); }
+    .detail-metric-value { font-family: 'Geist Mono', monospace; font-size: 1.125rem; font-weight: 500; }
+    .test-breakdown-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); margin-bottom: 0.75rem; }
+    .test-breakdown { display: grid; gap: 0.5rem; }
+    .test-item { border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; background: #000; }
+    .test-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem; }
+    .test-item-name { font-weight: 500; font-size: 0.875rem; }
+    .test-item-type { font-size: 0.6875rem; text-transform: uppercase; padding: 0.125rem 0.5rem; border-radius: 4px; border: 1px solid var(--border); color: var(--text-secondary); }
+    .test-item-stats { font-family: 'Geist Mono', monospace; font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 0.375rem; }
+    .test-concepts { font-size: 0.8125rem; line-height: 1.5; }
+    .concept-matched { color: #3fb950; }
+    .concept-missed { color: #d29922; }
+    .detail-empty { color: var(--text-secondary); font-size: 0.875rem; font-style: italic; padding: 1rem; text-align: center; }
     .test-files-section { background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
     .test-files-section h2 { margin-bottom: 1rem; }
     .test-files-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
@@ -1470,8 +1605,16 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
       </div>
     </div>
 
+    <section class="section radar-section">
+      <h2>Performance Profile</h2>
+      <div class="radar-container">
+        ${radarSvg}
+      </div>
+    </section>
+
     <section class="section">
       <h2>Result History</h2>
+      <p style="color: var(--text-secondary); font-size: 0.8125rem; margin-bottom: 1rem;">Click a row to view detailed test breakdown</p>
       <table class="results-table">
         <thead>
           <tr>
@@ -1532,6 +1675,99 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
         document.querySelectorAll('.test-file-content').forEach(c => c.classList.remove('active'));
         tab.classList.add('active');
         document.querySelector('.test-file-content[data-index="' + index + '"]').classList.add('active');
+      });
+    });
+
+    // Result row expand/collapse
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+    function renderTestBreakdown(data) {
+      if (!data || !data.testResults || data.testResults.length === 0) {
+        return '<div class="detail-empty">Detailed breakdown not available</div>';
+      }
+      const m = data.aggregatedMetrics || {};
+      let html = '<div class="detail-content">';
+      html += '<div class="detail-metrics">';
+      html += '<div class="detail-metric"><div class="detail-metric-label">Accuracy</div><div class="detail-metric-value">' + (m.accuracy != null ? m.accuracy.toFixed(1) + '%' : '-') + '</div></div>';
+      html += '<div class="detail-metric"><div class="detail-metric-label">Tokens</div><div class="detail-metric-value">' + (m.tokensTotal != null ? m.tokensTotal.toLocaleString() : '-') + '</div></div>';
+      html += '<div class="detail-metric"><div class="detail-metric-label">Duration</div><div class="detail-metric-value">' + (m.durationMs != null ? (m.durationMs / 1000).toFixed(1) + 's' : '-') + '</div></div>';
+      html += '<div class="detail-metric"><div class="detail-metric-label">Cost</div><div class="detail-metric-value">$' + (m.costUsd != null ? m.costUsd.toFixed(4) : '-') + '</div></div>';
+      html += '<div class="detail-metric"><div class="detail-metric-label">Tools</div><div class="detail-metric-value">' + (m.toolCount != null ? m.toolCount : '-') + '</div></div>';
+      html += '</div>';
+
+      // Group by test name
+      const byTest = {};
+      data.testResults.forEach(function(tr) {
+        const name = tr.test ? tr.test.name : 'Unknown';
+        if (!byTest[name]) byTest[name] = [];
+        byTest[name].push(tr);
+      });
+
+      html += '<div class="test-breakdown-title">Test Results (' + data.testResults.length + ')</div>';
+      html += '<div class="test-breakdown">';
+      Object.keys(byTest).forEach(function(name) {
+        const runs = byTest[name];
+        const avgAcc = runs.reduce(function(s, r) { return s + (r.metrics ? r.metrics.accuracy : 0); }, 0) / runs.length;
+        const first = runs[0];
+        const type = first.test ? first.test.type : '';
+        const tokens = first.metrics ? first.metrics.tokensTotal : 0;
+        const dur = first.metrics ? (first.metrics.durationMs / 1000).toFixed(1) : '-';
+        const cost = first.metrics ? first.metrics.costUsd.toFixed(4) : '-';
+        const matched = first.matchedConcepts || [];
+        const missed = first.missedConcepts || [];
+
+        html += '<div class="test-item">';
+        html += '<div class="test-item-header"><span class="test-item-name">' + esc(name) + '</span><span class="test-item-type">' + esc(type) + '</span></div>';
+        html += '<div class="test-item-stats">' + avgAcc.toFixed(1) + '% accuracy · ' + tokens.toLocaleString() + ' tokens · ' + dur + 's · $' + cost;
+        if (runs.length > 1) html += ' · ' + runs.length + ' runs';
+        html += '</div>';
+        if (matched.length > 0 || missed.length > 0) {
+          html += '<div class="test-concepts">';
+          if (matched.length > 0) html += '<span class="concept-matched">Matched: ' + matched.map(esc).join(', ') + '</span>';
+          if (matched.length > 0 && missed.length > 0) html += '<br>';
+          if (missed.length > 0) html += '<span class="concept-missed">Missed: ' + missed.map(esc).join(', ') + '</span>';
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+      html += '</div></div>';
+      return html;
+    }
+
+    document.querySelectorAll('.result-row').forEach(function(row) {
+      row.addEventListener('click', async function() {
+        const id = row.dataset.resultId;
+        const detail = document.querySelector('.result-detail[data-result-id="' + id + '"]');
+        if (!detail) return;
+
+        // Toggle: if already active, collapse
+        if (detail.classList.contains('active')) {
+          detail.classList.remove('active');
+          row.classList.remove('expanded');
+          return;
+        }
+
+        // Collapse any other open detail
+        document.querySelectorAll('.result-detail.active').forEach(function(d) { d.classList.remove('active'); });
+        document.querySelectorAll('.result-row.expanded').forEach(function(r) { r.classList.remove('expanded'); });
+
+        row.classList.add('expanded');
+        detail.classList.add('active');
+
+        // Fetch if not already loaded
+        if (!detail.dataset.loaded) {
+          detail.querySelector('td').innerHTML = '<span class="detail-placeholder">Loading...</span>';
+          try {
+            const res = await fetch('/api/result/' + encodeURIComponent(id));
+            if (!res.ok) throw new Error('Not found');
+            const data = await res.json();
+            detail.querySelector('td').innerHTML = renderTestBreakdown(data);
+            detail.dataset.loaded = '1';
+          } catch (e) {
+            detail.querySelector('td').innerHTML = '<div class="detail-empty">Detailed breakdown not available</div>';
+            detail.dataset.loaded = '1';
+          }
+        }
       });
     });
   </script>

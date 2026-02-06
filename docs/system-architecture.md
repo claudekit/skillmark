@@ -187,8 +187,9 @@
 │  ├─────────────────────────────────────────────────────────────┤ │
 │  │ • api-endpoints-handler.ts                                   │ │
 │  │   - POST /api/results (submit benchmarks)                    │ │
+│  │   - GET /api/result/:id (full benchmark detail)             │ │
 │  │   - GET /api/leaderboard (rankings)                          │ │
-│  │   - GET /api/skill/:name (details)                           │ │
+│  │   - GET /api/skill/:name (full metrics per result)           │ │
 │  │   - POST /api/verify (validate API key)                      │ │
 │  │                                                               │ │
 │  │ • github-oauth-authentication-handler.ts                     │ │
@@ -423,14 +424,31 @@ Request: GET /api/skill/my-skill-name
 │  │  ├─ Query D1: SELECT * FROM results WHERE skillId = ?
 │  │  ├─ Order by timestamp DESC
 │  │  ├─ Limit 10 recent runs
-│  │  └─ Calculate statistics (avg, best, trend)
+│  │  └─ Return full metrics per result (tokensTotal, durationMs, costUsd, toolCount)
 │  │
 │  └─ Transform to DetailResponse
 │
 └─ Response: {
    skillId, skillName, currentAccuracy, bestAccuracy,
    avgCost, avgDuration, testCount,
-   recentRuns: BenchmarkResult[]
+   recentRuns: [{id, tokensTotal, durationMs, costUsd, toolCount, ...}]
+}
+
+Request: GET /api/result/:id
+┌─ Path: result-id (unique result identifier)
+│
+├─ Processing
+│  ├─ api-endpoints-handler
+│  │  ├─ Query D1: SELECT * FROM results WHERE id = ?
+│  │  └─ Return full benchmark detail with all metrics
+│  │
+│  └─ Include per-test breakdown
+│
+└─ Response: {
+   id, skillId, skillName, model, accuracy, securityScore,
+   tokensTotal, tokensInput, tokensOutput, durationMs, costUsd, toolCount,
+   testResults: [{name, accuracy, matched, missed, tokens, passed}],
+   aggregatedMetrics: {...}
 }
 ```
 
@@ -593,9 +611,15 @@ User CLI
   ├─ skillmark auth <api-key>
   │  └─ Read from ~/.skillmark/config.json
   │
-  └─ skillmark publish result.json --api-key <key>
-     ├─ POST /api/results with Bearer token
+  ├─ skillmark run <skill> (auto-publishes by default)
+  │  └─ POST /api/results with full metrics via Bearer token
+  │
+  └─ skillmark publish result.json (manual publish)
+     ├─ POST /api/results with full metrics via Bearer token
      └─ Server verifies SHA256 hash in D1 api_keys table
+
+Note: Auto-publish is default in 'run' command. Use --no-publish flag to skip.
+Manual publish command sends full metrics (tokens, cost, tools, test files, security).
 ```
 
 **Key Storage:**

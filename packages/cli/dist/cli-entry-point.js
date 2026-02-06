@@ -29,7 +29,8 @@ program
     .option('-m, --model <model>', 'Model to use (haiku|sonnet|opus)', 'opus')
     .option('-r, --runs <n>', 'Number of iterations', '3')
     .option('-o, --output <dir>', 'Output directory', './skillmark-results')
-    .option('-p, --publish', 'Auto-publish results after benchmark completes')
+    .option('-p, --publish', 'Publish results after benchmark (default: true)')
+    .option('--no-publish', 'Skip publishing results to leaderboard')
     .option('-k, --api-key <key>', 'API key for publishing (or use config/env)')
     .option('-e, --endpoint <url>', 'API endpoint URL for publishing')
     .option('-v, --verbose', 'Show detailed progress for each test step')
@@ -56,9 +57,8 @@ program
             output: options.output,
             verbose: options.verbose,
         });
-        // Auto-publish if requested
-        if (options.publish) {
-            console.log(chalk.blue('\n📤 Publishing results...\n'));
+        // Auto-publish unless --no-publish is passed
+        if (options.publish !== false) {
             // Get API key from option or config
             let apiKey = options.apiKey;
             let keySource = 'command line';
@@ -70,17 +70,20 @@ program
                 }
             }
             if (!apiKey) {
-                console.error(chalk.red('No API key found.'));
-                console.error(chalk.gray('Provide via --api-key, SKILLMARK_API_KEY env, or ~/.skillmarkrc'));
-                console.error(chalk.gray('\nGet your API key at: https://skillmark.sh/login'));
-                process.exit(1);
+                console.log(chalk.gray('\nResults not published. To auto-publish, get your API key at:'));
+                console.log(chalk.blue('  https://skillmark.sh/login'));
+                console.log(chalk.gray('Then run:'));
+                console.log(chalk.cyan('  skillmark login <key>\n'));
             }
-            console.log(chalk.gray(`Using API key from ${keySource}`));
-            await publishResultsWithAutoKey(result, {
-                apiKey,
-                endpoint: options.endpoint,
-                testsPath: options.tests,
-            });
+            else {
+                console.log(chalk.blue('\nPublishing results...\n'));
+                console.log(chalk.gray(`Using API key from ${keySource}`));
+                await publishResultsWithAutoKey(result, {
+                    apiKey,
+                    endpoint: options.endpoint,
+                    testsPath: options.tests,
+                });
+            }
         }
     }
     catch (error) {
@@ -154,7 +157,7 @@ program
         const rcPath = join(homedir(), '.skillmarkrc');
         await writeFile(rcPath, `api_key=${apiKey}\n`, 'utf-8');
         console.log(chalk.green('✓ API key saved to ~/.skillmarkrc'));
-        console.log(chalk.gray('\nYou can now use: skillmark run <skill> --publish'));
+        console.log(chalk.gray('\nResults will now auto-publish after each benchmark run.'));
     }
     catch (error) {
         console.error(chalk.red(`Error saving API key: ${error instanceof Error ? error.message : error}`));
@@ -195,8 +198,8 @@ if (!process.argv.slice(2).length) {
     console.log(chalk.gray('  Agent Skill Benchmarking Platform\n'));
     console.log('  ' + chalk.gray('Examples:'));
     console.log('    ' + chalk.cyan('skillmark run') + ' ~/.claude/skills/my-skill');
-    console.log('    ' + chalk.cyan('skillmark run') + ' ./skill --model opus --publish');
-    console.log('    ' + chalk.cyan('skillmark publish') + ' ./result.json');
+    console.log('    ' + chalk.cyan('skillmark run') + ' ./skill --model opus');
+    console.log('    ' + chalk.cyan('skillmark run') + ' ./skill --no-publish');
     console.log('    ' + chalk.cyan('skillmark leaderboard'));
     console.log('');
     program.outputHelp();

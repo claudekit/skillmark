@@ -94,11 +94,11 @@ apiRouter.post('/results', async (c) => {
       payload.model,
       payload.accuracy,
       payload.tokensTotal,
-      payload.tokensInput || null,
-      payload.tokensOutput || null,
+      payload.tokensInput ?? null,
+      payload.tokensOutput ?? null,
       payload.durationMs,
       payload.costUsd,
-      payload.toolCount || null,
+      payload.toolCount ?? null,
       payload.runs,
       payload.hash,
       payload.rawJson || null,
@@ -203,8 +203,13 @@ apiRouter.get('/skill/:name', async (c) => {
     // Get result history
     const history = await c.env.DB.prepare(`
       SELECT
+        id,
         accuracy,
         model,
+        tokens_total as tokensTotal,
+        duration_ms as durationMs,
+        cost_usd as costUsd,
+        tool_count as toolCount,
         security_score as securityScore,
         created_at as date
       FROM results
@@ -214,8 +219,13 @@ apiRouter.get('/skill/:name', async (c) => {
     `).bind(skill.skillId).all();
 
     const formattedHistory = history.results?.map((row: Record<string, unknown>) => ({
+      id: row.id,
       accuracy: row.accuracy,
       model: row.model,
+      tokensTotal: row.tokensTotal ?? null,
+      durationMs: row.durationMs ?? null,
+      costUsd: row.costUsd ?? null,
+      toolCount: row.toolCount ?? null,
       securityScore: row.securityScore ?? null,
       date: row.date ? new Date((row.date as number) * 1000).toISOString() : null,
     })) || [];
@@ -229,6 +239,28 @@ apiRouter.get('/skill/:name', async (c) => {
     });
   } catch (error) {
     console.error('Error fetching skill:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+/**
+ * GET /api/result/:id - Get full result detail (parsed raw_json)
+ */
+apiRouter.get('/result/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+
+    const result = await c.env.DB.prepare(`
+      SELECT raw_json FROM results WHERE id = ?
+    `).bind(id).first();
+
+    if (!result?.raw_json) {
+      return c.json({ error: 'Result not found or no detailed data available' }, 404);
+    }
+
+    return c.json(JSON.parse(result.raw_json as string));
+  } catch (error) {
+    console.error('Error fetching result detail:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });

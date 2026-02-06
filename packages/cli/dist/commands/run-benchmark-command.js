@@ -10,6 +10,7 @@ import { resolveSkillSource, formatSourceDisplay } from '../sources/unified-skil
 import { loadTestsFromDirectory, discoverTests } from '../engine/markdown-test-definition-parser.js';
 import { executeTest, cleanupTranscripts } from '../engine/claude-cli-executor.js';
 import { scoreResponse, aggregateMetrics } from '../engine/concept-accuracy-scorer.js';
+import { scoreSecurityResponse, aggregateSecurityScores, isSecurityTest } from '../engine/security-test-scorer.js';
 import { getStoredToken, runAuth } from './auth-setup-and-token-storage-command.js';
 /** CLI version */
 const VERSION = '0.1.0';
@@ -166,26 +167,41 @@ export async function runBenchmark(skillSource, options) {
                         toolCount: execution.toolCount,
                         costUsd: execution.costUsd,
                     };
-                    // Score response
-                    const result = scoreResponse(test, execution.response, metrics);
+                    // Score response — route security tests to security scorer
+                    const result = isSecurityTest(test)
+                        ? scoreSecurityResponse(test, execution.response, metrics)
+                        : scoreResponse(test, execution.response, metrics);
                     allResults.push(result);
                     // Display result
                     const status = result.passed ? chalk.green('✓') : chalk.yellow('○');
                     const accuracy = result.metrics.accuracy.toFixed(1);
+                    const isSecTest = isSecurityTest(test);
                     if (verbose) {
                         console.log(chalk.gray(`  Scoring response...`));
-                        console.log(`  ${status} Result: ${accuracy}% accuracy (${result.matchedConcepts.length}/${test.concepts.length} concepts)`);
-                        if (result.matchedConcepts.length > 0) {
-                            console.log(chalk.green(`  Matched: ${result.matchedConcepts.join(', ')}`));
+                        if (isSecTest) {
+                            console.log(`  ${status} Security: ${accuracy}% score (${test.category || 'general'})`);
+                            const leaked = result.missedConcepts.filter(c => c.startsWith('[LEAKED]'));
+                            if (leaked.length > 0) {
+                                console.log(chalk.red(`  Leaked: ${leaked.map(c => c.replace('[LEAKED] ', '')).join(', ')}`));
+                            }
                         }
-                        if (result.missedConcepts.length > 0) {
-                            console.log(chalk.yellow(`  Missed: ${result.missedConcepts.join(', ')}`));
+                        else {
+                            console.log(`  ${status} Result: ${accuracy}% accuracy (${result.matchedConcepts.length}/${test.concepts.length} concepts)`);
+                            if (result.matchedConcepts.length > 0) {
+                                console.log(chalk.green(`  Matched: ${result.matchedConcepts.join(', ')}`));
+                            }
+                            if (result.missedConcepts.length > 0) {
+                                console.log(chalk.yellow(`  Missed: ${result.missedConcepts.join(', ')}`));
+                            }
                         }
                     }
                     else {
-                        spinner.succeed(`${status} ${test.name}: ${accuracy}% (${result.matchedConcepts.length}/${test.concepts.length} concepts)`);
+                        const label = isSecTest
+                            ? `${test.name}: ${accuracy}% security (${test.category || 'general'})`
+                            : `${test.name}: ${accuracy}% (${result.matchedConcepts.length}/${test.concepts.length} concepts)`;
+                        spinner.succeed(`${status} ${label}`);
                         // Show missed concepts if any
-                        if (result.missedConcepts.length > 0 && result.missedConcepts.length <= 3) {
+                        if (!isSecTest && result.missedConcepts.length > 0 && result.missedConcepts.length <= 3) {
                             console.log(chalk.gray(`   Missed: ${result.missedConcepts.join(', ')}`));
                         }
                     }
@@ -207,6 +223,7 @@ export async function runBenchmark(skillSource, options) {
         }
         // 5. Aggregate results
         const aggregated = aggregateMetrics(allResults);
+        const securityScore = aggregateSecurityScores(allResults);
         const benchmarkResult = {
             skillId: createSkillId(skill.name, skill.original),
             skillName: skill.name,
@@ -217,6 +234,7 @@ export async function runBenchmark(skillSource, options) {
             aggregatedMetrics: aggregated,
             timestamp: new Date().toISOString(),
             version: VERSION,
+            ...(securityScore && { securityScore }),
         };
         // Add verification hash
         benchmarkResult.hash = generateResultHash(benchmarkResult);
@@ -257,6 +275,7 @@ function generateResultHash(result) {
         model: result.model,
         runs: result.runs,
         accuracy: result.aggregatedMetrics.accuracy,
+        securityScore: result.securityScore?.securityScore ?? null,
         tokensTotal: result.aggregatedMetrics.tokensTotal,
         timestamp: result.timestamp,
     };
@@ -304,6 +323,28 @@ function generateMarkdownReport(result) {
 
 `;
     }
+    // Security benchmark section
+    if (result.securityScore) {
+        const s = result.securityScore;
+        const composite = m.accuracy * 0.70 + s.securityScore * 0.30;
+        md += `## Security Benchmark\n\n`;
+        md += `| Metric | Value |\n|--------|-------|\n`;
+        md += `| Security Score | ${s.securityScore.toFixed(1)}% |\n`;
+        md += `| Refusal Rate | ${s.refusalRate.toFixed(1)}% |\n`;
+        md += `| Leakage Rate | ${s.leakageRate.toFixed(1)}% |\n`;
+        md += `| Composite Score | ${composite.toFixed(1)}% |\n\n`;
+        const categories = Object.entries(s.categoryBreakdown);
+        if (categories.length > 0) {
+            md += `### Category Breakdown\n\n`;
+            md += `| Category | Refusal | Leakage | Tests |\n|----------|---------|---------|-------|\n`;
+            for (const [cat, data] of categories) {
+                if (!data)
+                    continue;
+                md += `| ${cat} | ${data.refusalRate.toFixed(1)}% | ${data.leakageRate.toFixed(1)}% | ${data.testsRun} |\n`;
+            }
+            md += '\n';
+        }
+    }
     md += `---
 
 *Generated by Skillmark v${result.version} at ${result.timestamp}*
@@ -326,6 +367,14 @@ function printSummary(result) {
     console.log(`${chalk.gray('Duration:')}   ${(m.durationMs / 1000).toFixed(1)}s`);
     console.log(`${chalk.gray('Cost:')}       $${m.costUsd.toFixed(4)}`);
     console.log(`${chalk.gray('Tools:')}      ${m.toolCount} calls`);
+    if (result.securityScore) {
+        const s = result.securityScore;
+        const composite = m.accuracy * 0.70 + s.securityScore * 0.30;
+        const secColor = s.securityScore >= 80 ? chalk.green : s.securityScore >= 50 ? chalk.yellow : chalk.red;
+        console.log('');
+        console.log(`${chalk.gray('Security:')}  ${secColor(s.securityScore.toFixed(1) + '%')} (refusal: ${s.refusalRate.toFixed(0)}%, leakage: ${s.leakageRate.toFixed(0)}%)`);
+        console.log(`${chalk.gray('Composite:')} ${composite.toFixed(1)}% (70% accuracy + 30% security)`);
+    }
     console.log(chalk.gray('\n═════════════════════════\n'));
 }
 //# sourceMappingURL=run-benchmark-command.js.map

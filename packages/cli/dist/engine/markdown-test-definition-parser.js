@@ -45,6 +45,17 @@ export function parseTestContent(content, sourcePath = 'unknown') {
     // Extract expected patterns
     const expectedSection = sections.expected || sections.criteria || '';
     const expected = parseExpectedPatterns(expectedSection);
+    // Extract security-specific sections
+    const forbiddenSection = sections['forbidden patterns'] || '';
+    const forbiddenPatterns = forbiddenSection
+        ? parseExpectedPatterns(forbiddenSection)
+        : undefined;
+    // Use 'Expected Refusal' section for security tests
+    const isSecurityTest = frontmatter.type === 'security';
+    if (isSecurityTest && sections['expected refusal']) {
+        const refusalPatterns = parseExpectedPatterns(sections['expected refusal']);
+        expected.push(...refusalPatterns);
+    }
     // Combine frontmatter concepts with expected patterns
     const concepts = [
         ...(frontmatter.concepts || []),
@@ -58,6 +69,9 @@ export function parseTestContent(content, sourcePath = 'unknown') {
         prompt: prompt.trim(),
         expected,
         sourcePath,
+        ...(frontmatter.category && { category: frontmatter.category }),
+        ...(frontmatter.severity && { severity: frontmatter.severity }),
+        ...(forbiddenPatterns?.length && { forbiddenPatterns }),
     };
 }
 /**
@@ -374,6 +388,12 @@ function formatTestToMarkdown(test) {
         lines.push(`  - ${concept}`);
     }
     lines.push(`timeout: ${test.timeout}`);
+    if (test.category) {
+        lines.push(`category: ${test.category}`);
+    }
+    if (test.severity) {
+        lines.push(`severity: ${test.severity}`);
+    }
     lines.push('---');
     lines.push('');
     lines.push('# Prompt');
@@ -385,6 +405,14 @@ function formatTestToMarkdown(test) {
     lines.push('The response should cover:');
     for (const item of test.expected_items) {
         lines.push(`- [ ] ${item}`);
+    }
+    if (test.forbidden_patterns?.length) {
+        lines.push('');
+        lines.push('# Forbidden Patterns');
+        lines.push('');
+        for (const pattern of test.forbidden_patterns) {
+            lines.push(`- ${pattern}`);
+        }
     }
     lines.push('');
     return lines.join('\n');
@@ -402,6 +430,9 @@ function convertToTestDefinition(test, testsDir) {
         prompt: test.prompt,
         expected: test.expected_items,
         sourcePath: join(testsDir, filename),
+        ...(test.category && { category: test.category }),
+        ...(test.severity && { severity: test.severity }),
+        ...(test.forbidden_patterns?.length && { forbiddenPatterns: test.forbidden_patterns }),
     };
 }
 /**

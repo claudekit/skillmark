@@ -2,7 +2,7 @@
  * Publish results command - uploads benchmark results to leaderboard API
  */
 import { readFile, readdir } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { resolve, join, basename } from 'node:path';
 import chalk from 'chalk';
 import ora from 'ora';
 /** Default API endpoint */
@@ -81,10 +81,14 @@ function validateResult(result) {
     }
 }
 /**
- * Upload result to API
+ * Upload result to API with full metrics
  */
 async function uploadResult(result, apiKey, endpoint) {
     const url = `${endpoint}/results`;
+    // Extract test files from result's test definitions
+    const testFiles = await extractTestFilesFromResult(result);
+    // Detect skill.sh link
+    const skillshLink = detectSkillshLink(result.skillSource);
     const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -99,12 +103,19 @@ async function uploadResult(result, apiKey, endpoint) {
             model: result.model,
             accuracy: result.aggregatedMetrics.accuracy,
             tokensTotal: result.aggregatedMetrics.tokensTotal,
+            tokensInput: result.aggregatedMetrics.tokensInput,
+            tokensOutput: result.aggregatedMetrics.tokensOutput,
             durationMs: result.aggregatedMetrics.durationMs,
             costUsd: result.aggregatedMetrics.costUsd,
+            toolCount: result.aggregatedMetrics.toolCount,
             runs: result.runs,
             hash: result.hash,
             timestamp: result.timestamp,
             rawJson: JSON.stringify(result),
+            testFiles: testFiles.length > 0 ? testFiles : undefined,
+            skillshLink: skillshLink || undefined,
+            securityScore: result.securityScore?.securityScore ?? undefined,
+            securityJson: result.securityScore ? JSON.stringify(result.securityScore) : undefined,
         }),
     });
     if (!response.ok) {
@@ -112,6 +123,27 @@ async function uploadResult(result, apiKey, endpoint) {
         throw new Error(`API error (${response.status}): ${errorText}`);
     }
     return response.json();
+}
+/**
+ * Extract test files from result's test definitions (source paths)
+ */
+async function extractTestFilesFromResult(result) {
+    const files = [];
+    const seen = new Set();
+    for (const tr of result.testResults) {
+        const sourcePath = tr.test.sourcePath;
+        if (!sourcePath || seen.has(sourcePath))
+            continue;
+        seen.add(sourcePath);
+        try {
+            const content = await readFile(sourcePath, 'utf-8');
+            files.push({ name: basename(sourcePath), content });
+        }
+        catch {
+            // File may not exist (result from different machine) — skip
+        }
+    }
+    return files;
 }
 /**
  * Publish results with auto-key (from run command with --publish flag)
@@ -228,6 +260,8 @@ async function uploadResultWithExtras(result, apiKey, endpoint, testFiles, skill
             rawJson: JSON.stringify(result),
             testFiles: testFiles.length > 0 ? testFiles : undefined,
             skillshLink: skillshLink || undefined,
+            securityScore: result.securityScore?.securityScore ?? undefined,
+            securityJson: result.securityScore ? JSON.stringify(result.securityScore) : undefined,
         }),
     });
     if (!response.ok) {

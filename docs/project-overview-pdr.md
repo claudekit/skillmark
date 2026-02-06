@@ -79,9 +79,10 @@ Skillmark is a benchmarking platform for evaluating Claude AI skill effectivenes
 ### Webapp Package (@skillmark/webapp)
 
 1. **REST API (Cloudflare Worker)**
-   - POST /api/results: Accept benchmark submissions (Bearer auth)
+   - POST /api/results: Accept benchmark submissions (Bearer auth, full metrics)
+   - GET /api/result/:id: Full benchmark detail with per-test breakdown
    - GET /api/leaderboard: Paginated rankings
-   - GET /api/skill/{name}: Single skill details + history
+   - GET /api/skill/:name: Single skill details + full metrics per result
    - POST /api/verify: Validate API keys
 
 2. **Authentication**
