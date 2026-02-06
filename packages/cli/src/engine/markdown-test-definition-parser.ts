@@ -561,7 +561,7 @@ async function performEnhancedSkillAnalysis(
  * 3. If analysis fails, gracefully degrade to basic prompt
  * 4. Generate tests via Claude CLI
  */
-async function generateTestsFromSkillMd(skillPath: string): Promise<TestDefinition[]> {
+export async function generateTestsFromSkillMd(skillPath: string): Promise<TestDefinition[]> {
   const testsDir = join(skillPath, 'tests');
 
   console.log('Generating tests using Claude Code CLI (enhanced mode)...');

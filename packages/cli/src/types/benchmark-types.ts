@@ -143,6 +143,8 @@ export interface RunOptions {
   output: string;
   /** Show verbose progress output */
   verbose?: boolean;
+  /** Force regenerate tests from SKILL.md even if tests/ exists */
+  generateTests?: boolean;
 }
 
 /** CLI publish command options */

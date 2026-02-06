@@ -1,13 +1,13 @@
 /**
  * Run benchmark command - executes benchmarks against a skill
  */
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import chalk from 'chalk';
 import ora from 'ora';
 import { resolveSkillSource, formatSourceDisplay } from '../sources/unified-skill-source-resolver.js';
-import { loadTestsFromDirectory, discoverTests } from '../engine/markdown-test-definition-parser.js';
+import { loadTestsFromDirectory, discoverTests, generateTestsFromSkillMd } from '../engine/markdown-test-definition-parser.js';
 import { executeTest, cleanupTranscripts } from '../engine/claude-cli-executor.js';
 import { scoreResponse, aggregateMetrics } from '../engine/concept-accuracy-scorer.js';
 import { scoreSecurityResponse, aggregateSecurityScores, isSecurityTest } from '../engine/security-test-scorer.js';
@@ -94,7 +94,14 @@ export async function runBenchmark(skillSource, options) {
         // 2. Load test definitions
         spinner.start('Loading test definitions...');
         let tests;
-        if (options.tests) {
+        if (options.generateTests) {
+            // Force regenerate tests from SKILL.md
+            const testsDir = join(skill.localPath, 'tests');
+            await rm(testsDir, { recursive: true, force: true });
+            spinner.text = 'Regenerating tests from SKILL.md...';
+            tests = await generateTestsFromSkillMd(skill.localPath);
+        }
+        else if (options.tests) {
             // Use explicit tests path
             tests = await loadTestsFromDirectory(resolve(options.tests));
         }

@@ -1362,7 +1362,7 @@ function computeRadarMetrics(skill: LeaderboardRow, results: SkillResultRow[]): 
  * Render SVG radar chart for performance profile
  */
 function renderRadarChart(metrics: RadarMetrics): string {
-  const cx = 150, cy = 150, maxR = 110;
+  const cx = 180, cy = 160, maxR = 110;
   const labels = ['Accuracy', 'Security', 'Tokens', 'Cost', 'Speed'];
   const values = [metrics.accuracy, metrics.security, metrics.tokenEfficiency, metrics.costEfficiency, metrics.speed];
 
@@ -1409,7 +1409,7 @@ function renderRadarChart(metrics: RadarMetrics): string {
             <text x="${lx.toFixed(1)}" y="${(ly + 13).toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" class="radar-value">${val}</text>`;
   }).join('\n    ');
 
-  return `<svg viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
+  return `<svg viewBox="0 0 360 340" xmlns="http://www.w3.org/2000/svg">
     ${gridLines}
     ${axisLines}
     ${dataPolygon}

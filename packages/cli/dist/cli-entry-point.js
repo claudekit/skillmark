@@ -34,6 +34,7 @@ program
     .option('-k, --api-key <key>', 'API key for publishing (or use config/env)')
     .option('-e, --endpoint <url>', 'API endpoint URL for publishing')
     .option('-v, --verbose', 'Show detailed progress for each test step')
+    .option('-g, --generate-tests', 'Force regenerate tests from SKILL.md (overwrites existing tests/)')
     .action(async (skillSource, options) => {
     try {
         // Validate model
@@ -56,6 +57,7 @@ program
             runs,
             output: options.output,
             verbose: options.verbose,
+            generateTests: options.generateTests,
         });
         // Auto-publish unless --no-publish is passed
         if (options.publish !== false) {

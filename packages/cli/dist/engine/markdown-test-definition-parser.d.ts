@@ -15,4 +15,14 @@ export declare function loadTestsFromDirectory(dirPath: string): Promise<TestDef
  * Auto-discover test files from skill directory
  */
 export declare function discoverTests(skillPath: string): Promise<TestDefinition[]>;
+/**
+ * Auto-generate tests from SKILL.md using Claude Code CLI with structured JSON output.
+ *
+ * Enhanced flow:
+ * 1. Try to invoke skill-creator with @claude-code-guide for skill analysis
+ * 2. Build enhanced prompt with analysis (capabilities, concepts, edge cases)
+ * 3. If analysis fails, gracefully degrade to basic prompt
+ * 4. Generate tests via Claude CLI
+ */
+export declare function generateTestsFromSkillMd(skillPath: string): Promise<TestDefinition[]>;
 //# sourceMappingURL=markdown-test-definition-parser.d.ts.map
