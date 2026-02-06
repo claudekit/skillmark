@@ -16,6 +16,8 @@ interface LeaderboardRow {
   skillName: string;
   source: string;
   bestAccuracy: number;
+  bestSecurity: number | null;
+  compositeScore: number | null;
   bestModel: string;
   avgTokens: number;
   avgCost: number;
@@ -41,6 +43,8 @@ pagesRouter.get('/', async (c) => {
         l.skill_name as skillName,
         l.source,
         l.best_accuracy as bestAccuracy,
+        l.best_security as bestSecurity,
+        l.composite_score as compositeScore,
         l.best_model as bestModel,
         l.avg_tokens as avgTokens,
         l.avg_cost as avgCost,
@@ -89,6 +93,8 @@ pagesRouter.get('/skill/:name', async (c) => {
         l.skill_name as skillName,
         l.source,
         l.best_accuracy as bestAccuracy,
+        l.best_security as bestSecurity,
+        l.composite_score as compositeScore,
         l.best_model as bestModel,
         l.avg_tokens as avgTokens,
         l.avg_cost as avgCost,
@@ -109,6 +115,7 @@ pagesRouter.get('/skill/:name', async (c) => {
         r.model,
         r.tokens_total as tokensTotal,
         r.cost_usd as costUsd,
+        r.security_score as securityScore,
         r.created_at as createdAt,
         r.submitter_github as submitterGithub,
         r.skillsh_link as skillshLink,
@@ -124,6 +131,7 @@ pagesRouter.get('/skill/:name', async (c) => {
       model: r.model,
       tokensTotal: r.tokensTotal,
       costUsd: r.costUsd,
+      securityScore: r.securityScore ?? null,
       createdAt: r.createdAt ? new Date((r.createdAt as number) * 1000).toISOString() : null,
       submitterGithub: r.submitterGithub,
       skillshLink: r.skillshLink,
@@ -272,6 +280,11 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
   const rows = entries.map((entry, index) => {
     const rank = index + 1;
     const accuracy = entry.bestAccuracy.toFixed(1);
+    const security = entry.bestSecurity != null ? `${entry.bestSecurity.toFixed(0)}%` : '\u2014';
+    const composite = entry.compositeScore != null ? `${entry.compositeScore.toFixed(1)}%` : '\u2014';
+    const securityWarning = entry.bestSecurity != null && entry.bestSecurity < 50
+      ? '<span class="security-warning" title="Low security score">\u25CF</span> '
+      : '';
     const source = entry.source || '';
     const repoPath = source.replace('https://github.com/', '').replace(/\.git$/, '');
     const submitter = entry.submitterGithub;
@@ -295,6 +308,8 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
             </a>
           ` : '<span class="no-submitter">-</span>'}
         </td>
+        <td class="security">${securityWarning}${security}</td>
+        <td class="composite">${composite}</td>
         <td class="accuracy">${accuracy}%</td>
       </tr>
     `;
@@ -715,6 +730,33 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
       font-weight: 500;
     }
 
+    .security {
+      text-align: right;
+      font-family: 'Geist Mono', monospace;
+      color: var(--text-secondary);
+    }
+
+    .composite {
+      text-align: right;
+      font-family: 'Geist Mono', monospace;
+      font-weight: 500;
+    }
+
+    .security-warning {
+      color: #d29922;
+      font-size: 0.625rem;
+    }
+
+    .security-banner {
+      background: rgba(210, 153, 34, 0.1);
+      border: 1px solid rgba(210, 153, 34, 0.3);
+      color: #d29922;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      font-size: 0.875rem;
+    }
+
     /* Empty state */
     .empty-state {
       text-align: center;
@@ -857,6 +899,8 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
             <th>#</th>
             <th>Skill</th>
             <th>Submitter</th>
+            <th>Security</th>
+            <th>Composite</th>
             <th>Accuracy</th>
           </tr>
         </thead>
@@ -1080,6 +1124,7 @@ function renderHowItWorksPage(): string {
       <table>
         <tr><td><code>knowledge</code></td><td>Q&A style tests checking if response covers expected concepts</td></tr>
         <tr><td><code>task</code></td><td>Execution tests verifying tool usage and task completion</td></tr>
+        <tr><td><code>security</code></td><td>Security tests checking refusal of malicious prompts and absence of forbidden content</td></tr>
       </table>
     </section>
 
@@ -1267,6 +1312,7 @@ interface SkillResultRow {
   model: string;
   tokensTotal: number;
   costUsd: number;
+  securityScore: number | null;
   createdAt: string | null;
   submitterGithub: string | null;
   skillshLink: string | null;
@@ -1285,6 +1331,7 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
       <td class="result-date">${r.createdAt ? formatRelativeTime(new Date(r.createdAt).getTime() / 1000) : '-'}</td>
       <td class="result-model">${escapeHtml(r.model)}</td>
       <td class="result-accuracy">${r.accuracy.toFixed(1)}%</td>
+      <td class="result-security">${r.securityScore != null ? r.securityScore.toFixed(0) + '%' : '\u2014'}</td>
       <td class="result-tokens">${r.tokensTotal?.toLocaleString() || '-'}</td>
       <td class="result-cost">$${r.costUsd?.toFixed(4) || '-'}</td>
       <td class="result-submitter">
@@ -1341,7 +1388,7 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
     .skill-meta { display: flex; gap: 1.5rem; color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 2rem; }
     .skill-meta a { color: #58a6ff; text-decoration: none; }
     .skill-meta a:hover { text-decoration: underline; }
-    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1.5rem; margin-bottom: 3rem; }
+    .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1.5rem; margin-bottom: 3rem; }
     .stat-card { background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
     .stat-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); margin-bottom: 0.5rem; }
     .stat-value { font-family: 'Geist Mono', monospace; font-size: 1.5rem; font-weight: 500; }
@@ -1351,7 +1398,10 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
     .results-table th { text-align: left; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary); font-weight: 500; padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
     .results-table td { padding: 0.75rem 0; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
     .result-accuracy { font-family: 'Geist Mono', monospace; font-weight: 500; }
+    .result-security { font-family: 'Geist Mono', monospace; color: var(--text-secondary); }
     .result-tokens, .result-cost { font-family: 'Geist Mono', monospace; color: var(--text-secondary); }
+    .security-warning { color: #d29922; font-size: 0.625rem; }
+    .security-banner { background: rgba(210, 153, 34, 0.1); border: 1px solid rgba(210, 153, 34, 0.3); color: #d29922; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; font-size: 0.875rem; }
     .submitter-link { display: flex; align-items: center; gap: 0.375rem; color: var(--text-secondary); text-decoration: none; font-size: 0.8125rem; }
     .submitter-link:hover { color: var(--text); }
     .submitter-avatar-sm { width: 16px; height: 16px; border-radius: 50%; }
@@ -1367,7 +1417,7 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
     footer { margin-top: 3rem; padding: 2rem 0; border-top: 1px solid var(--border); text-align: center; color: var(--text-secondary); font-size: 0.8125rem; }
     footer a { color: var(--text); text-decoration: none; }
     @media (max-width: 768px) {
-      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
       .results-table { font-size: 0.8125rem; }
     }
   </style>
@@ -1403,6 +1453,10 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
         <div class="stat-value">${skill.bestAccuracy.toFixed(1)}%</div>
       </div>
       <div class="stat-card">
+        <div class="stat-label">Security</div>
+        <div class="stat-value">${skill.bestSecurity != null ? skill.bestSecurity.toFixed(0) + '%' : '\u2014'}</div>
+      </div>
+      <div class="stat-card">
         <div class="stat-label">Best Model</div>
         <div class="stat-value">${escapeHtml(skill.bestModel)}</div>
       </div>
@@ -1424,6 +1478,7 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
             <th>Date</th>
             <th>Model</th>
             <th>Accuracy</th>
+            <th>Security</th>
             <th>Tokens</th>
             <th>Cost</th>
             <th>Submitter</th>
@@ -1434,6 +1489,32 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
         </tbody>
       </table>
     </section>
+
+    ${skill.bestSecurity != null ? `
+    <section class="section">
+      <h2>Security Benchmark</h2>
+      ${skill.bestSecurity < 50 ? `
+        <div class="security-banner">
+          <span class="security-warning">\u25CF</span>
+          This skill has a low security score. Consider running security benchmarks to identify vulnerabilities.
+        </div>
+      ` : ''}
+      <div class="stats-grid" style="grid-template-columns: repeat(3, 1fr);">
+        <div class="stat-card">
+          <div class="stat-label">Security Score</div>
+          <div class="stat-value">${skill.bestSecurity.toFixed(1)}%</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Composite Score</div>
+          <div class="stat-value">${skill.compositeScore?.toFixed(1) || '\u2014'}%</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Accuracy</div>
+          <div class="stat-value">${skill.bestAccuracy.toFixed(1)}%</div>
+        </div>
+      </div>
+    </section>
+    ` : ''}
 
     ${testFilesSection}
 

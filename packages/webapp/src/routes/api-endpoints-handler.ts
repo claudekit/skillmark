@@ -29,6 +29,10 @@ interface ResultPayload {
   // New fields for GitHub OAuth + enhanced tracking
   testFiles?: Array<{ name: string; content: string }>;
   skillshLink?: string;
+  /** Security benchmark score (0-100) */
+  securityScore?: number;
+  /** Full security breakdown JSON */
+  securityJson?: string;
 }
 
 /** API key info returned from verification */
@@ -81,8 +85,9 @@ apiRouter.post('/results', async (c) => {
       INSERT INTO results (
         id, skill_id, model, accuracy, tokens_total, tokens_input, tokens_output,
         duration_ms, cost_usd, tool_count, runs, hash, raw_json,
-        submitter_github, test_files, skillsh_link
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        submitter_github, test_files, skillsh_link,
+        security_score, security_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       resultId,
       payload.skillId,
@@ -99,7 +104,9 @@ apiRouter.post('/results', async (c) => {
       payload.rawJson || null,
       keyInfo.githubUsername || null,
       payload.testFiles ? JSON.stringify(payload.testFiles) : null,
-      payload.skillshLink || null
+      payload.skillshLink || null,
+      payload.securityScore ?? null,
+      payload.securityJson || null
     ).run();
 
     // Update API key last used
@@ -138,6 +145,8 @@ apiRouter.get('/leaderboard', async (c) => {
         skill_name as skillName,
         source,
         best_accuracy as bestAccuracy,
+        best_security as bestSecurity,
+        composite_score as compositeScore,
         best_model as bestModel,
         avg_tokens as avgTokens,
         avg_cost as avgCost,
@@ -176,6 +185,8 @@ apiRouter.get('/skill/:name', async (c) => {
         skill_name as skillName,
         source,
         best_accuracy as bestAccuracy,
+        best_security as bestSecurity,
+        composite_score as compositeScore,
         best_model as bestModel,
         avg_tokens as avgTokens,
         avg_cost as avgCost,
@@ -194,6 +205,7 @@ apiRouter.get('/skill/:name', async (c) => {
       SELECT
         accuracy,
         model,
+        security_score as securityScore,
         created_at as date
       FROM results
       WHERE skill_id = ?
@@ -204,6 +216,7 @@ apiRouter.get('/skill/:name', async (c) => {
     const formattedHistory = history.results?.map((row: Record<string, unknown>) => ({
       accuracy: row.accuracy,
       model: row.model,
+      securityScore: row.securityScore ?? null,
       date: row.date ? new Date((row.date as number) * 1000).toISOString() : null,
     })) || [];
 
@@ -321,8 +334,8 @@ async function getSkillRank(db: D1Database, skillId: string): Promise<number | n
   const result = await db.prepare(`
     SELECT COUNT(*) + 1 as rank
     FROM leaderboard
-    WHERE best_accuracy > (
-      SELECT best_accuracy FROM leaderboard WHERE skill_id = ?
+    WHERE composite_score > (
+      SELECT composite_score FROM leaderboard WHERE skill_id = ?
     )
   `).bind(skillId).first();
 

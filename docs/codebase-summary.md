@@ -15,6 +15,7 @@ skillmark/
 │   │   │   ├── engine/
 │   │   │   │   ├── markdown-test-definition-parser.ts
 │   │   │   │   ├── concept-accuracy-scorer.ts
+│   │   │   │   ├── security-test-scorer.ts
 │   │   │   │   ├── claude-cli-executor.ts
 │   │   │   │   ├── skill-content-collector.ts
 │   │   │   │   ├── skill-creator-invoker.ts
@@ -116,9 +117,11 @@ User Input (CLI)
 └─────────────────────────────────────────────┘
     ↓
 ┌─ Response Scoring ────────────────────────────┐
-│ input: response, expected concepts            │
-│ process: concept-accuracy-scorer              │
-│ output: BenchmarkMetrics, matched concepts    │
+│ input: response, test type                    │
+│ process:                                      │
+│   - Standard: concept-accuracy-scorer         │
+│   - Security: security-test-scorer            │
+│ output: BenchmarkMetrics, passed flag         │
 └─────────────────────────────────────────────┘
     ↓
 ┌─ Metrics Aggregation ─────────────────────────┐
@@ -169,7 +172,8 @@ Response: skill details + 10 recent runs
 
 ### TestDefinition
 - `name`: string (unique identifier)
-- `type`: 'knowledge' | 'task' (Q&A or execution)
+- `type`: 'knowledge' | 'task' | 'security' (Q&A, execution, or safety test)
+- `category`: string (security category: prompt-injection, jailbreak, etc)
 - `concepts`: string[] (validation targets, 3-5 typical)
 - `timeout`: number (seconds, typical 60-300)
 - `prompt`: string (the test question/task)
@@ -379,8 +383,9 @@ Future: Implement comprehensive test suite with:
 ---
 
 **Codebase Stats:**
-- CLI source: ~3,900 lines of TypeScript
+- CLI source: ~4,200 lines of TypeScript (includes security-test-scorer)
 - Webapp source: ~500 lines of TypeScript
-- Total: ~4,400 lines
+- Total: ~4,700 lines
+- Test suite: 69 tests (56 standard + 13 security tests)
 
 **Last Updated:** February 2025
