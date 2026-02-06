@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -30,33 +31,15 @@ jobs:
       - name: Build CLI
         run: pnpm --filter @skillmark/cli build
 
-      - name: Check for changesets
-        id: check
-        run: |
-          if ls .changeset/*.md 1>/dev/null 2>&1; then
-            echo "has_changesets=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_changesets=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Version packages
-        if: steps.check.outputs.has_changesets == 'true'
-        run: pnpm changeset version
-
-      - name: Commit version bump
-        if: steps.check.outputs.has_changesets == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "chore: version packages" || echo "No changes to commit"
-          git push
-
-      - name: Publish to npm
-        run: pnpm changeset publish
+      - name: Create Release Pull Request or Publish
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          publish: pnpm release
+          version: pnpm version
+          title: 'chore: version packages'
+          commit: 'chore: version packages'
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Push git tags
-        run: git push --tags
