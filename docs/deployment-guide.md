@@ -49,45 +49,46 @@ export CF_ACCOUNT_ID=<your-cloudflare-account-id>
 
 ## Part 1: CLI Package Deployment (@skillmark/cli)
 
-### Automated Release with Changesets
+### Autonomous Release with Changesets
 
-The CLI uses [Changesets](https://github.com/changesets/changesets) for version management and automated publishing.
+The CLI uses [Changesets](https://github.com/changesets/changesets) with auto-generation from conventional commits. The release process is **fully autonomous** — no manual `pnpm changeset` needed.
 
-#### Step 1: Create a Changeset (Before PR)
+#### How It Works
+
+On every push to `main`, the release workflow:
+
+1. **Auto-generates a changeset** from conventional commit messages since the last release tag
+2. **Determines bump type** from commit prefixes:
+   - `feat!:` or `BREAKING CHANGE` → **major** (e.g., 0.2.0 → 1.0.0)
+   - `feat:` → **minor** (e.g., 0.2.0 → 0.3.0)
+   - `fix:`, `perf:`, `refactor:`, etc. → **patch** (e.g., 0.2.0 → 0.2.1)
+3. **Creates a "chore: version packages" PR** that bumps `package.json` versions and generates `CHANGELOG.md`
+4. **Merging that PR** triggers npm publish + git tag push
+
+#### Safeguards
+- Skips auto-generation if manual changeset files already exist
+- Skips runs triggered by version bump commits (prevents infinite loop)
+- Uses `fetch-depth: 0` for full git history to find the last release tag
+
+#### Manual Override
+
+You can still manually create changesets for more control:
 
 ```bash
-# When making changes that should be released
 pnpm changeset
-
-# Interactive prompts:
-# 1. Select packages: @skillmark/cli
-# 2. Choose bump type: patch | minor | major
-# 3. Write summary of changes
-
-# This creates a .changeset/<random-id>.md file
-# Commit this file with your PR
+# Select packages, bump type, and write summary
+# Commit the .changeset/*.md file with your PR
 ```
 
-#### Step 2: Merge to Main
+If a manual changeset exists, auto-generation is skipped.
 
-When your PR merges to `main`:
-1. GitHub Action detects changeset files
-2. Creates a "Version Packages" PR automatically
-3. This PR bumps `package.json` version and updates `CHANGELOG.md`
+#### Bump Type Reference
 
-#### Step 3: Publish Release
-
-When you merge the "Version Packages" PR:
-1. GitHub Action publishes to npm automatically
-2. Creates git tags for the release
-
-#### Changeset Bump Types
-
-| Type | When to Use | Example |
-|------|-------------|---------|
-| `patch` | Bug fixes, docs | 0.1.0 → 0.1.1 |
-| `minor` | New features (backward compatible) | 0.1.0 → 0.2.0 |
-| `major` | Breaking changes | 0.1.0 → 1.0.0 |
+| Type | Commit Prefix | Example |
+|------|---------------|---------|
+| `patch` | `fix:`, `perf:`, `refactor:`, `chore:` | 0.2.0 → 0.2.1 |
+| `minor` | `feat:` | 0.2.0 → 0.3.0 |
+| `major` | `feat!:`, `BREAKING CHANGE` | 0.2.0 → 1.0.0 |
 
 ### Manual Release (Legacy)
 
@@ -470,135 +471,24 @@ wrangler d1 backup restore skillmark-db <backup-id>
 
 ### CLI Release Workflow (release-cli.yml)
 
-Uses [changesets/action](https://github.com/changesets/action):
+Fully autonomous release using [changesets/action](https://github.com/changesets/action) with auto-generated changesets from conventional commits:
 
-```yaml
-name: Release CLI
-
-on:
-  push:
-    branches: [main]
-
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          registry-url: 'https://registry.npmjs.org'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @skillmark/cli build
-      - uses: changesets/action@v1
-        with:
-          publish: pnpm release
-          version: pnpm version
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+```
+Push to main (feat:/fix:/etc.)
+  → Auto-generate changeset from commit messages
+  → changesets/action creates "version packages" PR
+  → Merge PR → publish to npm + push git tags
 ```
 
-### Legacy Workflow Reference
+**Key workflow steps:**
+1. Checkout with `fetch-depth: 0` (full history for tag detection)
+2. Build CLI
+3. Auto-generate changeset if none exist (reads commits since last `@skillmark/cli@*` tag)
+4. `changesets/action` creates version PR or publishes
 
-Create `.github/workflows/deploy.yml`:
+**Required permissions:** `contents: write`, `pull-requests: write`
 
-```yaml
-name: Deploy Skillmark
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 8
-
-      - name: Setup Node
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Build
-        run: pnpm build
-
-      - name: Test
-        run: pnpm test
-
-  deploy-cli:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && startsWith(github.ref, 'refs/tags/v')
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup Node
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 8
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Build CLI
-        run: pnpm --filter @skillmark/cli build
-
-      - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  deploy-webapp:
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Setup Node
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 8
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Build webapp
-        run: pnpm --filter @skillmark/webapp build
-
-      - name: Deploy to Cloudflare
-        run: pnpm --filter @skillmark/webapp deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-```
+**Org setting required:** "Allow GitHub Actions to create and approve pull requests" must be enabled.
 
 ### GitHub Secrets Required
 
@@ -766,6 +656,6 @@ wrangler deploy
 
 ---
 
-**Last Updated:** February 2025
+**Last Updated:** February 2026
 **Maintained By:** DevOps Team
-**Version Alignment:** 0.1.0
+**Version Alignment:** 0.2.0
