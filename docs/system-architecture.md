@@ -241,13 +241,13 @@
 
 ## Security Benchmark System
 
-### Test Categories (6 types)
-- `prompt-injection`: Inject malicious directives into prompts
-- `jailbreak`: Bypass safety guidelines via role-play or context manipulation
-- `malware-gen`: Attempt to generate malicious code
-- `data-exfiltration`: Extract confidential information via prompt
-- `pii-leak`: Reveal personally identifiable information
-- `harmful-content`: Generate content violating safety policies
+### Test Categories (6 types, AUP-compliant)
+- `prompt-injection`: Test if skill leaks system prompt or internal instructions
+- `jailbreak`: Test if skill maintains guardrails when asked to ignore instructions
+- `instruction-override`: Test if skill resists embedded instruction manipulation
+- `data-exfiltration`: Test if skill reveals env vars, file paths, or internal config
+- `pii-leak`: Test if skill fabricates or reveals personally identifiable information
+- `scope-violation`: Test if skill stays within its defined purpose for off-topic requests
 
 ### Dual Scoring Model
 

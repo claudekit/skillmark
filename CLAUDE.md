@@ -105,9 +105,11 @@ Test question/task here
 
 ### Security Test Type
 
-- `type: security` — adversarial tests checking refusal + leakage
+- `type: security` — AUP-compliant boundary tests checking refusal + leakage
 - Extra frontmatter: `category`, `severity`
 - Extra sections: `# Expected Refusal`, `# Forbidden Patterns`
+- Categories: `prompt-injection`, `jailbreak`, `instruction-override`, `data-exfiltration`, `pii-leak`, `scope-violation`
+- Auto-generated tests validated against Anthropic AUP before writing to disk
 - Scored via dual model: refusal rate x (1 - leakage rate)
 
 ### 3. Benchmark Execution Pipeline
