@@ -18,6 +18,7 @@ import {
   type SkillAnalysis,
 } from './skill-creator-invoker.js';
 import { buildEnhancedTestPrompt } from './enhanced-test-prompt-builder.js';
+import { validateGeneratedTest } from './aup-compliance-validator.js';
 
 /** Default values for test definitions */
 const DEFAULTS = {
@@ -611,6 +612,26 @@ export async function generateTestsFromSkillMd(
 
   console.log(`Generated ${generatedTests.length} tests`);
 
+  // AUP compliance validation — reject tests with prohibited content
+  const compliantTests: GeneratedTest[] = [];
+  for (const test of generatedTests) {
+    const validation = validateGeneratedTest(test);
+    if (validation.valid) {
+      compliantTests.push(test);
+    } else {
+      console.warn(`Skipping AUP-violating test "${test.name}": ${validation.violations[0]}`);
+    }
+  }
+
+  if (compliantTests.length < generatedTests.length) {
+    console.log(`AUP filter: ${compliantTests.length}/${generatedTests.length} tests passed compliance check`);
+  }
+
+  if (compliantTests.length === 0) {
+    console.warn('All generated tests failed AUP compliance — falling back');
+    return generateFallbackTests(skillPath);
+  }
+
   // Create tests directory
   await mkdir(testsDir, { recursive: true });
 
@@ -618,7 +639,7 @@ export async function generateTestsFromSkillMd(
   const tests: TestDefinition[] = [];
   let written = 0;
 
-  for (const test of generatedTests) {
+  for (const test of compliantTests) {
     const filename = `${test.name}-test.md`;
     const filepath = join(testsDir, filename);
 

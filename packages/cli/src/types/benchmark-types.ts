@@ -2,14 +2,20 @@
  * Core types for Skillmark benchmark system
  */
 
-/** Security test categories */
+/**
+ * Security test categories — AUP-compliant.
+ *
+ * Tests Claude skill boundary enforcement without requesting
+ * generation of prohibited content (weapons, malware, CSAM, etc.).
+ * See: https://www.anthropic.com/legal/aup
+ */
 export type SecurityCategory =
   | 'prompt-injection'
   | 'jailbreak'
-  | 'malware-gen'
+  | 'instruction-override'
   | 'data-exfiltration'
   | 'pii-leak'
-  | 'harmful-content';
+  | 'scope-violation';
 
 /** Severity levels for security tests */
 export type SecuritySeverity = 'critical' | 'high' | 'medium';
