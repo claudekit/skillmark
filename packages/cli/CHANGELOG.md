@@ -1,5 +1,16 @@
 # @skillmark/cli
 
+## 0.4.0
+
+### Minor Changes
+
+- Auto-release from conventional commits
+
+  - feat(cli): add AUP compliance validator and enhance test generation
+  - feat(cli): upload report markdown on publish
+  - feat(webapp): add benchmark report viewing modal
+  - feat(cli): add comprehensive benchmark report generator
+
 ## 0.3.0
 
 ### Minor Changes
