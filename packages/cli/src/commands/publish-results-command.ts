@@ -21,6 +21,7 @@ export interface AutoPublishOptions {
   apiKey: string;
   endpoint?: string;
   testsPath?: string;
+  reportMarkdown?: string;
 }
 
 /**
@@ -220,7 +221,8 @@ export async function publishResultsWithAutoKey(
       options.apiKey,
       endpoint,
       testFiles,
-      skillshLink
+      skillshLink,
+      options.reportMarkdown
     );
     spinner.succeed('Uploaded successfully');
 
@@ -301,7 +303,8 @@ async function uploadResultWithExtras(
   apiKey: string,
   endpoint: string,
   testFiles: TestFileUpload[],
-  skillshLink: string | null
+  skillshLink: string | null,
+  reportMarkdown?: string
 ): Promise<{
   leaderboardUrl?: string;
   rank?: number;
@@ -337,6 +340,7 @@ async function uploadResultWithExtras(
       securityScore: result.securityScore?.securityScore ?? undefined,
       securityJson: result.securityScore ? JSON.stringify(result.securityScore) : undefined,
       repoUrl: result.repoUrl || undefined,
+      reportMarkdown: reportMarkdown || undefined,
     }),
   });
 

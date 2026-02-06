@@ -11,6 +11,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { runBenchmark } from './commands/run-benchmark-command.js';
 import { publishResults, publishResultsWithAutoKey } from './commands/publish-results-command.js';
+import { generateMarkdownReport } from './engine/benchmark-report-generator.js';
 import { viewLeaderboard } from './commands/view-leaderboard-command.js';
 import { readApiKeyConfig, getConfigSourceDescription } from './config/api-key-config-reader.js';
 import { runAuth, showAuthStatus } from './commands/auth-setup-and-token-storage-command.js';
@@ -107,6 +108,7 @@ program
             apiKey,
             endpoint: options.endpoint,
             testsPath: options.tests,
+            reportMarkdown: generateMarkdownReport(result),
           });
         }
       }
