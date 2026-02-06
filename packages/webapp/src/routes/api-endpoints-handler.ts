@@ -33,6 +33,8 @@ interface ResultPayload {
   securityScore?: number;
   /** Full security breakdown JSON */
   securityJson?: string;
+  /** Git repository URL (auto-detected from skill directory) */
+  repoUrl?: string;
 }
 
 /** API key info returned from verification */
@@ -86,8 +88,8 @@ apiRouter.post('/results', async (c) => {
         id, skill_id, model, accuracy, tokens_total, tokens_input, tokens_output,
         duration_ms, cost_usd, tool_count, runs, hash, raw_json,
         submitter_github, test_files, skillsh_link,
-        security_score, security_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        security_score, security_json, repo_url
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       resultId,
       payload.skillId,
@@ -106,7 +108,8 @@ apiRouter.post('/results', async (c) => {
       payload.testFiles ? JSON.stringify(payload.testFiles) : null,
       payload.skillshLink || null,
       payload.securityScore ?? null,
-      payload.securityJson || null
+      payload.securityJson || null,
+      payload.repoUrl || null
     ).run();
 
     // Update API key last used
@@ -148,6 +151,7 @@ apiRouter.get('/leaderboard', async (c) => {
         best_security as bestSecurity,
         composite_score as compositeScore,
         best_model as bestModel,
+        repo_url as repoUrl,
         avg_tokens as avgTokens,
         avg_cost as avgCost,
         last_tested as lastTested,
@@ -188,6 +192,7 @@ apiRouter.get('/skill/:name', async (c) => {
         best_security as bestSecurity,
         composite_score as compositeScore,
         best_model as bestModel,
+        repo_url as repoUrl,
         avg_tokens as avgTokens,
         avg_cost as avgCost,
         last_tested as lastTested,

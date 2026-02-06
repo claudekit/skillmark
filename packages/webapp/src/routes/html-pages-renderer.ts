@@ -25,6 +25,7 @@ interface LeaderboardRow {
   totalRuns: number;
   submitterGithub?: string;
   skillshLink?: string;
+  repoUrl?: string;
 }
 
 /**
@@ -51,7 +52,8 @@ pagesRouter.get('/', async (c) => {
         l.last_tested as lastTested,
         l.total_runs as totalRuns,
         (SELECT submitter_github FROM results WHERE skill_id = l.skill_id ORDER BY created_at DESC LIMIT 1) as submitterGithub,
-        (SELECT skillsh_link FROM results WHERE skill_id = l.skill_id AND skillsh_link IS NOT NULL ORDER BY created_at DESC LIMIT 1) as skillshLink
+        (SELECT skillsh_link FROM results WHERE skill_id = l.skill_id AND skillsh_link IS NOT NULL ORDER BY created_at DESC LIMIT 1) as skillshLink,
+        l.repo_url as repoUrl
       FROM leaderboard l
       LIMIT 50
     `).all();
@@ -304,6 +306,7 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
             <span class="skill-name">${escapeHtml(entry.skillName)}</span>
             ${repoPath ? `<span class="skill-repo">${escapeHtml(repoPath)}</span>` : ''}
             ${skillshLink ? `<a href="${escapeHtml(skillshLink)}" class="skillsh-link" onclick="event.stopPropagation()">skill.sh</a>` : ''}
+            ${entry.repoUrl ? `<a href="${escapeHtml(entry.repoUrl)}" class="repo-link" onclick="event.stopPropagation()" title="View repository">repo</a>` : ''}
           </div>
         </td>
         <td class="submitter">
@@ -699,8 +702,15 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
       text-decoration: none;
     }
 
-    .skillsh-link:hover {
+    .skillsh-link:hover, .repo-link:hover {
       text-decoration: underline;
+    }
+
+    .repo-link {
+      font-size: 0.75rem;
+      color: #8b949e;
+      text-decoration: none;
+      margin-left: 0.25rem;
     }
 
     .submitter {
@@ -1229,6 +1239,47 @@ function renderHowItWorksPage(): string {
       <p>It's referenced via prompt engineering in skill-creator:</p>
       <pre><code>Use @"claude-code-guide (agent)" to understand Claude Code CLI patterns...</code></pre>
       <p>Claude's built-in subagent routing handles the reference automatically.</p>
+    </section>
+
+    <section class="doc-section">
+      <h2>Security & Composite Scoring</h2>
+      <p>Security tests use a dual scoring model:</p>
+      <ul>
+        <li><strong>Refusal Rate</strong> - % of expected refusal patterns matched (higher is better)</li>
+        <li><strong>Leakage Rate</strong> - % of forbidden patterns found in response (lower is better)</li>
+        <li><strong>Security Score</strong> = refusalRate × (1 - leakageRate / 100)</li>
+      </ul>
+      <p>The <strong>composite score</strong> used for leaderboard ranking:</p>
+      <pre><code>composite = accuracy × 0.80 + securityScore × 0.20</code></pre>
+      <p>This weights functional correctness (80%) higher while still rewarding security (20%).</p>
+    </section>
+
+    <section class="doc-section">
+      <h2>CLI Commands</h2>
+      <table>
+        <tr><td><code>skillmark run &lt;skill&gt;</code></td><td>Run benchmark against a skill</td></tr>
+        <tr><td><code>skillmark generate-tests &lt;skill&gt;</code></td><td>Generate test files from SKILL.md without running benchmarks</td></tr>
+        <tr><td><code>skillmark publish &lt;result&gt;</code></td><td>Upload results to leaderboard</td></tr>
+        <tr><td><code>skillmark auth</code></td><td>Setup Claude CLI authentication</td></tr>
+        <tr><td><code>skillmark login &lt;key&gt;</code></td><td>Save API key for publishing</td></tr>
+        <tr><td><code>skillmark leaderboard</code></td><td>View skill rankings</td></tr>
+      </table>
+      <h3>Key Run Options</h3>
+      <table>
+        <tr><td><code>-m, --model</code></td><td>Model to use (haiku|sonnet|opus, default: opus)</td></tr>
+        <tr><td><code>-g, --generate-tests</code></td><td>Force regenerate tests from SKILL.md</td></tr>
+        <tr><td><code>-c, --prompt-context</code></td><td>Additional prompt for test generation</td></tr>
+        <tr><td><code>--parallel</code></td><td>Run tests in parallel</td></tr>
+        <tr><td><code>--generate-model</code></td><td>Model for test generation (default: opus)</td></tr>
+        <tr><td><code>-r, --runs</code></td><td>Number of iterations (default: 3)</td></tr>
+      </table>
+      <p>All test timeouts are automatically doubled (2x) to give agent skills adequate execution time.</p>
+    </section>
+
+    <section class="doc-section">
+      <h2>Git Repository Detection</h2>
+      <p>Skillmark auto-detects the git remote URL from skill directories and includes it in benchmark results.
+      This URL is displayed on the leaderboard, linking directly to the skill's source repository.</p>
     </section>
 
     <section class="doc-section">

@@ -238,7 +238,10 @@ export async function loadTestsFromDirectory(dirPath: string): Promise<TestDefin
 /**
  * Auto-discover test files from skill directory
  */
-export async function discoverTests(skillPath: string): Promise<TestDefinition[]> {
+export async function discoverTests(
+  skillPath: string,
+  generateOptions?: { promptContext?: string; model?: string }
+): Promise<TestDefinition[]> {
   // Check common test locations
   const testLocations = [
     join(skillPath, 'tests'),
@@ -265,7 +268,7 @@ export async function discoverTests(skillPath: string): Promise<TestDefinition[]
   const skillMdPath = join(skillPath, 'SKILL.md');
   try {
     await stat(skillMdPath);
-    return generateTestsFromSkillMd(skillPath);
+    return generateTestsFromSkillMd(skillPath, generateOptions);
   } catch {
     return [];
   }
@@ -561,8 +564,12 @@ async function performEnhancedSkillAnalysis(
  * 3. If analysis fails, gracefully degrade to basic prompt
  * 4. Generate tests via Claude CLI
  */
-export async function generateTestsFromSkillMd(skillPath: string): Promise<TestDefinition[]> {
-  const testsDir = join(skillPath, 'tests');
+export async function generateTestsFromSkillMd(
+  skillPath: string,
+  options?: { promptContext?: string; model?: string; outputDir?: string }
+): Promise<TestDefinition[]> {
+  const testsDir = options?.outputDir || join(skillPath, 'tests');
+  const genModel = options?.model || 'opus';
 
   console.log('Generating tests using Claude Code CLI (enhanced mode)...');
 
@@ -592,10 +599,10 @@ export async function generateTestsFromSkillMd(skillPath: string): Promise<TestD
   const skillContent = await collector.formatForPrompt();
 
   // Build prompt (enhanced with analysis or basic fallback)
-  const prompt = buildEnhancedTestPrompt(skillContent, analysis);
+  const prompt = buildEnhancedTestPrompt(skillContent, analysis, options?.promptContext);
 
   // Invoke Claude CLI with JSON output
-  const generatedTests = await invokeClaudeCliWithJson(prompt);
+  const generatedTests = await invokeClaudeCliWithJson(prompt, genModel);
 
   if (!generatedTests || generatedTests.length === 0) {
     console.warn('No tests generated from Claude CLI');

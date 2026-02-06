@@ -73,7 +73,8 @@ export async function executeTest(
   }
 
   try {
-    const result = await runClaudeCli(args, workDir, test.timeout * 1000);
+    // 2x timeout multiplier — agent tests often need extra time for multi-step work
+    const result = await runClaudeCli(args, workDir, test.timeout * 2000);
     const durationMs = Date.now() - startTime;
 
     // Parse the JSON result from Claude CLI

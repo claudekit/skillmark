@@ -182,7 +182,7 @@ export async function loadTestsFromDirectory(dirPath) {
 /**
  * Auto-discover test files from skill directory
  */
-export async function discoverTests(skillPath) {
+export async function discoverTests(skillPath, generateOptions) {
     // Check common test locations
     const testLocations = [
         join(skillPath, 'tests'),
@@ -208,7 +208,7 @@ export async function discoverTests(skillPath) {
     const skillMdPath = join(skillPath, 'SKILL.md');
     try {
         await stat(skillMdPath);
-        return generateTestsFromSkillMd(skillPath);
+        return generateTestsFromSkillMd(skillPath, generateOptions);
     }
     catch {
         return [];
@@ -469,8 +469,9 @@ async function performEnhancedSkillAnalysis(skillPath) {
  * 3. If analysis fails, gracefully degrade to basic prompt
  * 4. Generate tests via Claude CLI
  */
-export async function generateTestsFromSkillMd(skillPath) {
-    const testsDir = join(skillPath, 'tests');
+export async function generateTestsFromSkillMd(skillPath, options) {
+    const testsDir = options?.outputDir || join(skillPath, 'tests');
+    const genModel = options?.model || 'opus';
     console.log('Generating tests using Claude Code CLI (enhanced mode)...');
     // Validate and collect skill content
     const collector = new SkillContentCollector(skillPath);
@@ -493,9 +494,9 @@ export async function generateTestsFromSkillMd(skillPath) {
     // Collect and format skill content for prompt
     const skillContent = await collector.formatForPrompt();
     // Build prompt (enhanced with analysis or basic fallback)
-    const prompt = buildEnhancedTestPrompt(skillContent, analysis);
+    const prompt = buildEnhancedTestPrompt(skillContent, analysis, options?.promptContext);
     // Invoke Claude CLI with JSON output
-    const generatedTests = await invokeClaudeCliWithJson(prompt);
+    const generatedTests = await invokeClaudeCliWithJson(prompt, genModel);
     if (!generatedTests || generatedTests.length === 0) {
         console.warn('No tests generated from Claude CLI');
         return generateFallbackTests(skillPath);

@@ -101,6 +101,8 @@ export interface BenchmarkResult {
     hash?: string;
     /** Security benchmark score (null if no security tests run) */
     securityScore?: SecurityScore;
+    /** Git repository URL (auto-detected from skill directory) */
+    repoUrl?: string;
 }
 /** Skill source types */
 export type SkillSourceType = 'local' | 'git' | 'skillsh';
@@ -129,6 +131,21 @@ export interface RunOptions {
     verbose?: boolean;
     /** Force regenerate tests from SKILL.md even if tests/ exists */
     generateTests?: boolean;
+    /** Additional prompt context to inject into test generation */
+    promptContext?: string;
+    /** Model to use for test generation (defaults to opus) */
+    generateModel?: 'haiku' | 'sonnet' | 'opus';
+    /** Run tests in parallel (concurrent Claude CLI processes) */
+    parallel?: boolean;
+}
+/** CLI generate-tests command options */
+export interface GenerateTestsOptions {
+    /** Model to use for test generation (defaults to opus) */
+    model: 'haiku' | 'sonnet' | 'opus';
+    /** Additional prompt context to inject into test generation */
+    promptContext?: string;
+    /** Output directory for generated tests (defaults to <skill>/tests) */
+    output?: string;
 }
 /** CLI publish command options */
 export interface PublishOptions {
@@ -169,7 +186,7 @@ export interface LeaderboardEntry {
     totalRuns: number;
     /** Best security score (null if never tested) */
     bestSecurity?: number;
-    /** Composite score: accuracy*0.70 + security*0.30 */
+    /** Composite score: accuracy*0.80 + security*0.20 */
     compositeScore?: number;
 }
 //# sourceMappingURL=benchmark-types.d.ts.map

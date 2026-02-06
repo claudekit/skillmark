@@ -14,6 +14,7 @@ import { publishResults, publishResultsWithAutoKey } from './commands/publish-re
 import { viewLeaderboard } from './commands/view-leaderboard-command.js';
 import { readApiKeyConfig, getConfigSourceDescription } from './config/api-key-config-reader.js';
 import { runAuth, showAuthStatus } from './commands/auth-setup-and-token-storage-command.js';
+import { generateTests } from './commands/generate-tests-command.js';
 const VERSION = '0.1.0';
 const program = new Command();
 program
@@ -35,6 +36,9 @@ program
     .option('-e, --endpoint <url>', 'API endpoint URL for publishing')
     .option('-v, --verbose', 'Show detailed progress for each test step')
     .option('-g, --generate-tests', 'Force regenerate tests from SKILL.md (overwrites existing tests/)')
+    .option('-c, --prompt-context <text>', 'Additional prompt context for test auto-generation')
+    .option('--generate-model <model>', 'Model for test generation (haiku|sonnet|opus)', 'opus')
+    .option('--parallel', 'Run tests in parallel (concurrent Claude CLI processes)')
     .action(async (skillSource, options) => {
     try {
         // Validate model
@@ -51,6 +55,12 @@ program
             process.exit(1);
         }
         // Run benchmark
+        // Validate generate model
+        const genModel = (options.generateModel || 'opus').toLowerCase();
+        if (!['haiku', 'sonnet', 'opus'].includes(genModel)) {
+            console.error(chalk.red(`Invalid generate model: ${options.generateModel}`));
+            process.exit(1);
+        }
         const result = await runBenchmark(skillSource, {
             tests: options.tests,
             model: model,
@@ -58,6 +68,9 @@ program
             output: options.output,
             verbose: options.verbose,
             generateTests: options.generateTests,
+            promptContext: options.promptContext,
+            generateModel: genModel,
+            parallel: options.parallel,
         });
         // Auto-publish unless --no-publish is passed
         if (options.publish !== false) {
@@ -120,6 +133,32 @@ program
         await publishResults(resultFile, {
             apiKey,
             endpoint: options.endpoint,
+        });
+    }
+    catch (error) {
+        console.error(chalk.red(`\nError: ${error instanceof Error ? error.message : error}`));
+        process.exit(1);
+    }
+});
+// Generate tests command - generate tests from SKILL.md without running benchmarks
+program
+    .command('generate-tests')
+    .description('Generate test files from SKILL.md without running benchmarks')
+    .argument('<skill-source>', 'Skill source (local path, git URL, or skill.sh reference)')
+    .option('-m, --model <model>', 'Model for test generation (haiku|sonnet|opus)', 'opus')
+    .option('-c, --prompt-context <text>', 'Additional prompt context for test generation')
+    .option('-o, --output <dir>', 'Output directory for generated tests (default: <skill>/tests)')
+    .action(async (skillSource, options) => {
+    try {
+        const model = (options.model || 'opus').toLowerCase();
+        if (!['haiku', 'sonnet', 'opus'].includes(model)) {
+            console.error(chalk.red(`Invalid model: ${options.model}`));
+            process.exit(1);
+        }
+        await generateTests(skillSource, {
+            model: model,
+            promptContext: options.promptContext,
+            output: options.output,
         });
     }
     catch (error) {

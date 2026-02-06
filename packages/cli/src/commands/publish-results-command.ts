@@ -150,6 +150,7 @@ async function uploadResult(
       skillshLink: skillshLink || undefined,
       securityScore: result.securityScore?.securityScore ?? undefined,
       securityJson: result.securityScore ? JSON.stringify(result.securityScore) : undefined,
+      repoUrl: result.repoUrl || undefined,
     }),
   });
 
@@ -335,6 +336,7 @@ async function uploadResultWithExtras(
       skillshLink: skillshLink || undefined,
       securityScore: result.securityScore?.securityScore ?? undefined,
       securityJson: result.securityScore ? JSON.stringify(result.securityScore) : undefined,
+      repoUrl: result.repoUrl || undefined,
     }),
   });
 

@@ -12,6 +12,7 @@ import { executeTest, cleanupTranscripts } from '../engine/claude-cli-executor.j
 import { scoreResponse, aggregateMetrics } from '../engine/concept-accuracy-scorer.js';
 import { scoreSecurityResponse, aggregateSecurityScores, isSecurityTest } from '../engine/security-test-scorer.js';
 import { getStoredToken, runAuth } from './auth-setup-and-token-storage-command.js';
+import { detectGitRepoUrl } from '../engine/git-repo-url-detector.js';
 /** CLI version */
 const VERSION = '0.1.0';
 /**
@@ -65,6 +66,108 @@ async function verifyClaudeAuth() {
     });
 }
 /**
+ * Execute a single test, score the result, and print status.
+ * Returns TestResult or null if execution failed.
+ */
+async function runSingleTest(test, skillPath, model, workDir, verbose, spinner) {
+    const testStart = Date.now();
+    if (verbose) {
+        console.log(chalk.cyan(`\n▶ Starting: ${test.name}`));
+        console.log(chalk.gray(`  Type: ${test.type} | Timeout: ${test.timeout * 2}s (2x) | Concepts: ${test.concepts.length}`));
+    }
+    else {
+        spinner.start(`Testing: ${test.name}`);
+    }
+    let elapsedTimer = null;
+    try {
+        if (verbose) {
+            const cliStart = Date.now();
+            process.stdout.write(chalk.gray(`  Invoking Claude CLI... 0s`));
+            elapsedTimer = setInterval(() => {
+                const elapsed = Math.floor((Date.now() - cliStart) / 1000);
+                process.stdout.write(`\r${chalk.gray(`  Invoking Claude CLI... ${elapsed}s`)}`);
+            }, 1000);
+        }
+        const execution = await executeTest(test, skillPath, model, workDir);
+        if (elapsedTimer) {
+            clearInterval(elapsedTimer);
+            process.stdout.write('\n');
+        }
+        if (!execution.success) {
+            if (verbose) {
+                console.log(chalk.red(`  ✗ Failed: ${execution.error}`));
+            }
+            else {
+                spinner.fail(`${test.name}: ${execution.error}`);
+            }
+            return null;
+        }
+        if (verbose) {
+            const elapsed = ((Date.now() - testStart) / 1000).toFixed(1);
+            console.log(chalk.gray(`  Execution complete (${elapsed}s)`));
+            console.log(chalk.gray(`  Tokens: ${execution.inputTokens + execution.outputTokens} | Tools: ${execution.toolCount} | Cost: $${execution.costUsd.toFixed(4)}`));
+        }
+        const metrics = {
+            accuracy: 0,
+            tokensTotal: execution.inputTokens + execution.outputTokens,
+            tokensInput: execution.inputTokens,
+            tokensOutput: execution.outputTokens,
+            durationMs: execution.durationMs,
+            toolCount: execution.toolCount,
+            costUsd: execution.costUsd,
+        };
+        const result = isSecurityTest(test)
+            ? scoreSecurityResponse(test, execution.response, metrics)
+            : scoreResponse(test, execution.response, metrics);
+        // Display result
+        const status = result.passed ? chalk.green('✓') : chalk.yellow('○');
+        const accuracy = result.metrics.accuracy.toFixed(1);
+        const isSecTest = isSecurityTest(test);
+        if (verbose) {
+            console.log(chalk.gray(`  Scoring response...`));
+            if (isSecTest) {
+                console.log(`  ${status} Security: ${accuracy}% score (${test.category || 'general'})`);
+                const leaked = result.missedConcepts.filter(c => c.startsWith('[LEAKED]'));
+                if (leaked.length > 0) {
+                    console.log(chalk.red(`  Leaked: ${leaked.map(c => c.replace('[LEAKED] ', '')).join(', ')}`));
+                }
+            }
+            else {
+                console.log(`  ${status} Result: ${accuracy}% accuracy (${result.matchedConcepts.length}/${test.concepts.length} concepts)`);
+                if (result.matchedConcepts.length > 0) {
+                    console.log(chalk.green(`  Matched: ${result.matchedConcepts.join(', ')}`));
+                }
+                if (result.missedConcepts.length > 0) {
+                    console.log(chalk.yellow(`  Missed: ${result.missedConcepts.join(', ')}`));
+                }
+            }
+        }
+        else {
+            const label = isSecTest
+                ? `${test.name}: ${accuracy}% security (${test.category || 'general'})`
+                : `${test.name}: ${accuracy}% (${result.matchedConcepts.length}/${test.concepts.length} concepts)`;
+            spinner.succeed(`${status} ${label}`);
+            if (!isSecTest && result.missedConcepts.length > 0 && result.missedConcepts.length <= 3) {
+                console.log(chalk.gray(`   Missed: ${result.missedConcepts.join(', ')}`));
+            }
+        }
+        return result;
+    }
+    catch (error) {
+        if (elapsedTimer) {
+            clearInterval(elapsedTimer);
+            process.stdout.write('\n');
+        }
+        if (verbose) {
+            console.log(chalk.red(`  ✗ Error: ${error instanceof Error ? error.message : 'Unknown error'}`));
+        }
+        else {
+            spinner.fail(`${test.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+        return null;
+    }
+}
+/**
  * Execute the run command
  */
 export async function runBenchmark(skillSource, options) {
@@ -91,6 +194,11 @@ export async function runBenchmark(skillSource, options) {
         spinner.start('Resolving skill source...');
         const skill = await resolveSkillSource(skillSource);
         spinner.succeed(`Resolved: ${formatSourceDisplay(skill)}`);
+        // 1b. Detect git repo URL
+        const repoUrl = await detectGitRepoUrl(skill.localPath);
+        if (repoUrl) {
+            console.log(chalk.gray(`  Repo: ${repoUrl}`));
+        }
         // 2. Load test definitions
         spinner.start('Loading test definitions...');
         let tests;
@@ -99,7 +207,10 @@ export async function runBenchmark(skillSource, options) {
             const testsDir = join(skill.localPath, 'tests');
             await rm(testsDir, { recursive: true, force: true });
             spinner.text = 'Regenerating tests from SKILL.md...';
-            tests = await generateTestsFromSkillMd(skill.localPath);
+            tests = await generateTestsFromSkillMd(skill.localPath, {
+                promptContext: options.promptContext,
+                model: options.generateModel || 'opus',
+            });
         }
         else if (options.tests) {
             // Use explicit tests path
@@ -107,7 +218,10 @@ export async function runBenchmark(skillSource, options) {
         }
         else {
             // Auto-discover tests in skill directory
-            tests = await discoverTests(skill.localPath);
+            tests = await discoverTests(skill.localPath, {
+                promptContext: options.promptContext,
+                model: options.generateModel || 'opus',
+            });
         }
         if (tests.length === 0) {
             spinner.fail('No test files found');
@@ -119,111 +233,29 @@ export async function runBenchmark(skillSource, options) {
         await mkdir(outputDir, { recursive: true });
         // 4. Run benchmarks
         const verbose = options.verbose ?? false;
-        console.log(chalk.blue(`\nRunning ${tests.length} test(s) × ${options.runs} run(s) with ${options.model}${verbose ? ' (verbose)' : ''}\n`));
+        const parallel = options.parallel ?? false;
+        console.log(chalk.blue(`\nRunning ${tests.length} test(s) × ${options.runs} run(s) with ${options.model}${parallel ? ' (parallel)' : ''}${verbose ? ' (verbose)' : ''}\n`));
         const allResults = [];
         const workDir = process.cwd();
         for (let run = 1; run <= options.runs; run++) {
             console.log(chalk.gray(`── Run ${run}/${options.runs} ──`));
-            for (const test of tests) {
-                const testStart = Date.now();
-                if (verbose) {
-                    console.log(chalk.cyan(`\n▶ Starting: ${test.name}`));
-                    console.log(chalk.gray(`  Type: ${test.type} | Timeout: ${test.timeout}s | Concepts: ${test.concepts.length}`));
-                }
-                else {
-                    spinner.start(`Testing: ${test.name}`);
-                }
-                // Elapsed timer for verbose mode (declared outside try for catch access)
-                let elapsedTimer = null;
-                try {
-                    if (verbose) {
-                        const cliStart = Date.now();
-                        process.stdout.write(chalk.gray(`  Invoking Claude CLI... 0s`));
-                        elapsedTimer = setInterval(() => {
-                            const elapsed = Math.floor((Date.now() - cliStart) / 1000);
-                            process.stdout.write(`\r${chalk.gray(`  Invoking Claude CLI... ${elapsed}s`)}`);
-                        }, 1000);
-                    }
-                    const execution = await executeTest(test, skill.localPath, options.model, workDir);
-                    // Clear elapsed timer
-                    if (elapsedTimer) {
-                        clearInterval(elapsedTimer);
-                        process.stdout.write('\n');
-                    }
-                    if (!execution.success) {
-                        if (verbose) {
-                            console.log(chalk.red(`  ✗ Failed: ${execution.error}`));
-                        }
-                        else {
-                            spinner.fail(`${test.name}: ${execution.error}`);
-                        }
-                        continue;
-                    }
-                    if (verbose) {
-                        const elapsed = ((Date.now() - testStart) / 1000).toFixed(1);
-                        console.log(chalk.gray(`  Execution complete (${elapsed}s)`));
-                        console.log(chalk.gray(`  Tokens: ${execution.inputTokens + execution.outputTokens} | Tools: ${execution.toolCount} | Cost: $${execution.costUsd.toFixed(4)}`));
-                    }
-                    // Calculate metrics
-                    const metrics = {
-                        accuracy: 0, // Calculated by scorer
-                        tokensTotal: execution.inputTokens + execution.outputTokens,
-                        tokensInput: execution.inputTokens,
-                        tokensOutput: execution.outputTokens,
-                        durationMs: execution.durationMs,
-                        toolCount: execution.toolCount,
-                        costUsd: execution.costUsd,
-                    };
-                    // Score response — route security tests to security scorer
-                    const result = isSecurityTest(test)
-                        ? scoreSecurityResponse(test, execution.response, metrics)
-                        : scoreResponse(test, execution.response, metrics);
-                    allResults.push(result);
-                    // Display result
-                    const status = result.passed ? chalk.green('✓') : chalk.yellow('○');
-                    const accuracy = result.metrics.accuracy.toFixed(1);
-                    const isSecTest = isSecurityTest(test);
-                    if (verbose) {
-                        console.log(chalk.gray(`  Scoring response...`));
-                        if (isSecTest) {
-                            console.log(`  ${status} Security: ${accuracy}% score (${test.category || 'general'})`);
-                            const leaked = result.missedConcepts.filter(c => c.startsWith('[LEAKED]'));
-                            if (leaked.length > 0) {
-                                console.log(chalk.red(`  Leaked: ${leaked.map(c => c.replace('[LEAKED] ', '')).join(', ')}`));
-                            }
-                        }
-                        else {
-                            console.log(`  ${status} Result: ${accuracy}% accuracy (${result.matchedConcepts.length}/${test.concepts.length} concepts)`);
-                            if (result.matchedConcepts.length > 0) {
-                                console.log(chalk.green(`  Matched: ${result.matchedConcepts.join(', ')}`));
-                            }
-                            if (result.missedConcepts.length > 0) {
-                                console.log(chalk.yellow(`  Missed: ${result.missedConcepts.join(', ')}`));
-                            }
-                        }
-                    }
-                    else {
-                        const label = isSecTest
-                            ? `${test.name}: ${accuracy}% security (${test.category || 'general'})`
-                            : `${test.name}: ${accuracy}% (${result.matchedConcepts.length}/${test.concepts.length} concepts)`;
-                        spinner.succeed(`${status} ${label}`);
-                        // Show missed concepts if any
-                        if (!isSecTest && result.missedConcepts.length > 0 && result.missedConcepts.length <= 3) {
-                            console.log(chalk.gray(`   Missed: ${result.missedConcepts.join(', ')}`));
-                        }
+            if (parallel) {
+                // Parallel execution — spawn all tests simultaneously
+                console.log(chalk.gray(`  Running ${tests.length} tests in parallel...`));
+                const promises = tests.map((test) => runSingleTest(test, skill.localPath, options.model, workDir, verbose, spinner));
+                const results = await Promise.allSettled(promises);
+                for (const settled of results) {
+                    if (settled.status === 'fulfilled' && settled.value) {
+                        allResults.push(settled.value);
                     }
                 }
-                catch (error) {
-                    // Clear elapsed timer on error
-                    if (elapsedTimer) {
-                        clearInterval(elapsedTimer);
-                        process.stdout.write('\n');
-                    }
-                    if (verbose) {
-                        console.log(chalk.red(`  ✗ Error: ${error instanceof Error ? error.message : 'Unknown error'}`));
-                    }
-                    else {
-                        spinner.fail(`${test.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            }
+            else {
+                // Sequential execution
+                for (const test of tests) {
+                    const result = await runSingleTest(test, skill.localPath, options.model, workDir, verbose, spinner);
+                    if (result) {
+                        allResults.push(result);
                     }
                 }
             }
@@ -242,6 +274,7 @@ export async function runBenchmark(skillSource, options) {
             timestamp: new Date().toISOString(),
             version: VERSION,
             ...(securityScore && { securityScore }),
+            ...(repoUrl && { repoUrl }),
         };
         // Add verification hash
         benchmarkResult.hash = generateResultHash(benchmarkResult);
@@ -333,7 +366,7 @@ function generateMarkdownReport(result) {
     // Security benchmark section
     if (result.securityScore) {
         const s = result.securityScore;
-        const composite = m.accuracy * 0.70 + s.securityScore * 0.30;
+        const composite = m.accuracy * 0.80 + s.securityScore * 0.20;
         md += `## Security Benchmark\n\n`;
         md += `| Metric | Value |\n|--------|-------|\n`;
         md += `| Security Score | ${s.securityScore.toFixed(1)}% |\n`;
@@ -359,14 +392,20 @@ function generateMarkdownReport(result) {
     return md;
 }
 /**
- * Print summary to console
+ * Print rich summary to console with test breakdown, insights, and suggestions
  */
 function printSummary(result) {
     const m = result.aggregatedMetrics;
-    console.log(chalk.bold('\n═══ Benchmark Summary ═══\n'));
-    console.log(`${chalk.gray('Skill:')}      ${result.skillName}`);
+    console.log(chalk.bold('\n╔══════════════════════════════════════════╗'));
+    console.log(chalk.bold('║         Benchmark Summary                ║'));
+    console.log(chalk.bold('╚══════════════════════════════════════════╝\n'));
+    // --- Overview ---
+    console.log(`${chalk.gray('Skill:')}      ${chalk.white(result.skillName)}`);
     console.log(`${chalk.gray('Model:')}      ${result.model}`);
     console.log(`${chalk.gray('Runs:')}       ${result.runs}`);
+    if (result.repoUrl) {
+        console.log(`${chalk.gray('Repo:')}       ${chalk.blue(result.repoUrl)}`);
+    }
     console.log('');
     const accuracyColor = m.accuracy >= 80 ? chalk.green : m.accuracy >= 60 ? chalk.yellow : chalk.red;
     console.log(`${chalk.gray('Accuracy:')}   ${accuracyColor(m.accuracy.toFixed(1) + '%')}`);
@@ -376,12 +415,101 @@ function printSummary(result) {
     console.log(`${chalk.gray('Tools:')}      ${m.toolCount} calls`);
     if (result.securityScore) {
         const s = result.securityScore;
-        const composite = m.accuracy * 0.70 + s.securityScore * 0.30;
+        const composite = m.accuracy * 0.80 + s.securityScore * 0.20;
         const secColor = s.securityScore >= 80 ? chalk.green : s.securityScore >= 50 ? chalk.yellow : chalk.red;
         console.log('');
         console.log(`${chalk.gray('Security:')}  ${secColor(s.securityScore.toFixed(1) + '%')} (refusal: ${s.refusalRate.toFixed(0)}%, leakage: ${s.leakageRate.toFixed(0)}%)`);
-        console.log(`${chalk.gray('Composite:')} ${composite.toFixed(1)}% (70% accuracy + 30% security)`);
+        console.log(`${chalk.gray('Composite:')} ${composite.toFixed(1)}% (80% accuracy + 20% security)`);
     }
-    console.log(chalk.gray('\n═════════════════════════\n'));
+    // --- Test-by-Test Breakdown ---
+    console.log(chalk.bold('\n── Test Results ──\n'));
+    const byTest = new Map();
+    for (const r of result.testResults) {
+        const existing = byTest.get(r.test.name) || [];
+        existing.push(r);
+        byTest.set(r.test.name, existing);
+    }
+    let passCount = 0;
+    let failCount = 0;
+    const weakTests = [];
+    const strongTests = [];
+    const allMissed = [];
+    for (const [testName, results] of byTest) {
+        const avgAccuracy = results.reduce((sum, r) => sum + r.metrics.accuracy, 0) / results.length;
+        const passed = avgAccuracy >= 70;
+        if (passed)
+            passCount++;
+        else
+            failCount++;
+        const status = passed ? chalk.green('✓') : chalk.red('✗');
+        const accColor = avgAccuracy >= 80 ? chalk.green : avgAccuracy >= 60 ? chalk.yellow : chalk.red;
+        const type = results[0].test.type === 'security' ? chalk.magenta('[SEC]') : chalk.cyan(`[${results[0].test.type.toUpperCase()}]`);
+        console.log(`  ${status} ${type} ${testName}: ${accColor(avgAccuracy.toFixed(1) + '%')}`);
+        // Collect missed concepts from first run for analysis
+        const missed = results[0].missedConcepts.filter(c => !c.startsWith('[LEAKED]'));
+        if (missed.length > 0) {
+            console.log(chalk.gray(`      Missed: ${missed.join(', ')}`));
+            allMissed.push(...missed);
+        }
+        if (avgAccuracy < 70) {
+            weakTests.push({ name: testName, accuracy: avgAccuracy, missed });
+        }
+        else if (avgAccuracy >= 90) {
+            strongTests.push({ name: testName, accuracy: avgAccuracy });
+        }
+    }
+    const totalTests = passCount + failCount;
+    const passRate = totalTests > 0 ? (passCount / totalTests * 100).toFixed(0) : '0';
+    console.log(chalk.gray(`\n  Pass rate: ${passCount}/${totalTests} (${passRate}%)`));
+    // --- Analysis & Insights ---
+    console.log(chalk.bold('\n── Analysis & Insights ──\n'));
+    // Overall grade
+    const grade = m.accuracy >= 90 ? 'A' : m.accuracy >= 80 ? 'B' : m.accuracy >= 70 ? 'C' : m.accuracy >= 60 ? 'D' : 'F';
+    const gradeColor = grade <= 'B' ? chalk.green : grade === 'C' ? chalk.yellow : chalk.red;
+    console.log(`  Grade: ${gradeColor(grade)} (${m.accuracy.toFixed(1)}% overall accuracy)`);
+    // Cost efficiency
+    const costPerTest = totalTests > 0 ? m.costUsd / totalTests : 0;
+    console.log(`  Cost/test: $${costPerTest.toFixed(4)} | Avg duration: ${(m.durationMs / 1000 / Math.max(totalTests * result.runs, 1)).toFixed(1)}s/test`);
+    // Strengths
+    if (strongTests.length > 0) {
+        console.log(chalk.green(`  Strengths: ${strongTests.map(t => t.name).join(', ')}`));
+    }
+    // Weaknesses
+    if (weakTests.length > 0) {
+        console.log(chalk.red(`  Weaknesses: ${weakTests.map(t => `${t.name} (${t.accuracy.toFixed(0)}%)`).join(', ')}`));
+    }
+    // Token efficiency insight
+    if (m.tokensOutput > m.tokensInput * 2) {
+        console.log(chalk.yellow(`  Note: High output/input ratio (${(m.tokensOutput / m.tokensInput).toFixed(1)}x) - skill may be verbose`));
+    }
+    // --- Suggestions ---
+    console.log(chalk.bold('\n── Suggestions ──\n'));
+    const suggestions = [];
+    if (weakTests.length > 0) {
+        const uniqueMissed = [...new Set(allMissed)];
+        if (uniqueMissed.length > 0) {
+            suggestions.push(`Address missing concepts: ${uniqueMissed.slice(0, 5).join(', ')}${uniqueMissed.length > 5 ? ` (+${uniqueMissed.length - 5} more)` : ''}`);
+        }
+        suggestions.push(`${weakTests.length} test(s) below 70% threshold — review skill instructions for these areas`);
+    }
+    if (m.accuracy < 80 && result.model !== 'opus') {
+        suggestions.push(`Try running with --model opus for potentially higher accuracy`);
+    }
+    if (m.toolCount === 0 && totalTests > 0) {
+        suggestions.push(`No tool calls detected — verify skill is being activated properly`);
+    }
+    if (result.securityScore && result.securityScore.leakageRate > 20) {
+        suggestions.push(`Security leakage rate is ${result.securityScore.leakageRate.toFixed(0)}% — add guardrails for sensitive data`);
+    }
+    if (result.securityScore && result.securityScore.refusalRate < 50) {
+        suggestions.push(`Low refusal rate (${result.securityScore.refusalRate.toFixed(0)}%) — strengthen prompt injection defenses`);
+    }
+    if (suggestions.length === 0) {
+        suggestions.push('All tests passing with good accuracy — consider adding more edge case tests');
+    }
+    for (const suggestion of suggestions) {
+        console.log(`  ${chalk.yellow('→')} ${suggestion}`);
+    }
+    console.log(chalk.gray('\n══════════════════════════════════════════\n'));
 }
 //# sourceMappingURL=run-benchmark-command.js.map
