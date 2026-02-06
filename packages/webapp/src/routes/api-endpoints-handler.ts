@@ -35,6 +35,8 @@ interface ResultPayload {
   securityJson?: string;
   /** Git repository URL (auto-detected from skill directory) */
   repoUrl?: string;
+  /** Benchmark report markdown */
+  reportMarkdown?: string;
 }
 
 /** API key info returned from verification */
@@ -88,8 +90,8 @@ apiRouter.post('/results', async (c) => {
         id, skill_id, model, accuracy, tokens_total, tokens_input, tokens_output,
         duration_ms, cost_usd, tool_count, runs, hash, raw_json,
         submitter_github, test_files, skillsh_link,
-        security_score, security_json, repo_url
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        security_score, security_json, repo_url, report_markdown
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       resultId,
       payload.skillId,
@@ -109,7 +111,8 @@ apiRouter.post('/results', async (c) => {
       payload.skillshLink || null,
       payload.securityScore ?? null,
       payload.securityJson || null,
-      payload.repoUrl || null
+      payload.repoUrl || null,
+      payload.reportMarkdown || null
     ).run();
 
     // Update API key last used
@@ -266,6 +269,50 @@ apiRouter.get('/result/:id', async (c) => {
     return c.json(JSON.parse(result.raw_json as string));
   } catch (error) {
     console.error('Error fetching result detail:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+/**
+ * GET /api/result/:id/test-files - Get test files for a result
+ */
+apiRouter.get('/result/:id/test-files', async (c) => {
+  try {
+    const id = c.req.param('id');
+
+    const result = await c.env.DB.prepare(`
+      SELECT test_files FROM results WHERE id = ?
+    `).bind(id).first();
+
+    if (!result?.test_files) {
+      return c.json({ error: 'No test files available' }, 404);
+    }
+
+    return c.json({ files: JSON.parse(result.test_files as string) });
+  } catch (error) {
+    console.error('Error fetching test files:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+/**
+ * GET /api/result/:id/report - Get benchmark report for a result
+ */
+apiRouter.get('/result/:id/report', async (c) => {
+  try {
+    const id = c.req.param('id');
+
+    const result = await c.env.DB.prepare(`
+      SELECT report_markdown FROM results WHERE id = ?
+    `).bind(id).first();
+
+    if (!result?.report_markdown) {
+      return c.json({ error: 'Report not available' }, 404);
+    }
+
+    return c.json({ markdown: result.report_markdown });
+  } catch (error) {
+    console.error('Error fetching report:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
