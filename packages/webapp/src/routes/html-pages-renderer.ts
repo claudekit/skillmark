@@ -17,6 +17,7 @@ interface LeaderboardRow {
   source: string;
   bestAccuracy: number;
   bestSecurity: number | null;
+  bestTrigger: number | null;
   compositeScore: number | null;
   bestModel: string;
   avgTokens: number;
@@ -45,6 +46,7 @@ pagesRouter.get('/', async (c) => {
         l.source,
         l.best_accuracy as bestAccuracy,
         l.best_security as bestSecurity,
+        l.best_trigger as bestTrigger,
         l.composite_score as compositeScore,
         l.best_model as bestModel,
         l.avg_tokens as avgTokens,
@@ -96,6 +98,7 @@ pagesRouter.get('/skill/:name', async (c) => {
         l.source,
         l.best_accuracy as bestAccuracy,
         l.best_security as bestSecurity,
+        l.best_trigger as bestTrigger,
         l.composite_score as compositeScore,
         l.best_model as bestModel,
         l.avg_tokens as avgTokens,
@@ -121,6 +124,9 @@ pagesRouter.get('/skill/:name', async (c) => {
         r.cost_usd as costUsd,
         r.tool_count as toolCount,
         r.security_score as securityScore,
+        r.trigger_score as triggerScore,
+        r.consistency_json as consistencyJson,
+        r.baseline_json as baselineJson,
         r.created_at as createdAt,
         r.submitter_github as submitterGithub,
         r.skillsh_link as skillshLink,
@@ -141,6 +147,9 @@ pagesRouter.get('/skill/:name', async (c) => {
       costUsd: r.costUsd as number,
       toolCount: (r.toolCount as number) ?? null,
       securityScore: (r.securityScore as number) ?? null,
+      triggerScore: (r.triggerScore as number) ?? null,
+      consistencyJson: (r.consistencyJson as string) ?? null,
+      baselineJson: (r.baselineJson as string) ?? null,
       createdAt: r.createdAt ? new Date((r.createdAt as number) * 1000).toISOString() : null,
       submitterGithub: r.submitterGithub as string | null,
       skillshLink: r.skillshLink as string | null,
@@ -291,6 +300,7 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
     const rank = index + 1;
     const accuracy = entry.bestAccuracy.toFixed(1);
     const security = entry.bestSecurity != null ? `${entry.bestSecurity.toFixed(0)}%` : '\u2014';
+    const trigger = entry.bestTrigger != null ? `${entry.bestTrigger.toFixed(0)}%` : '\u2014';
     const composite = entry.compositeScore != null ? `${entry.compositeScore.toFixed(1)}%` : '\u2014';
     const securityWarning = entry.bestSecurity != null && entry.bestSecurity < 50
       ? '<span class="security-warning" title="Low security score">\u25CF</span> '
@@ -320,6 +330,7 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
           ` : '<span class="no-submitter">-</span>'}
         </td>
         <td class="security">${securityWarning}${security}</td>
+        <td class="trigger">${trigger}</td>
         <td class="composite">${composite}</td>
         <td class="accuracy">${accuracy}%</td>
       </tr>
@@ -918,6 +929,7 @@ function renderLeaderboardPage(entries: LeaderboardRow[], currentUser: CurrentUs
             <th>Skill</th>
             <th>Submitter</th>
             <th>Security</th>
+            <th>Trigger</th>
             <th>Composite</th>
             <th>Accuracy</th>
           </tr>
@@ -1143,6 +1155,7 @@ function renderHowItWorksPage(): string {
         <tr><td><code>knowledge</code></td><td>Q&A style tests checking if response covers expected concepts</td></tr>
         <tr><td><code>task</code></td><td>Execution tests verifying tool usage and task completion</td></tr>
         <tr><td><code>security</code></td><td>Security tests checking refusal of malicious prompts and absence of forbidden content</td></tr>
+        <tr><td><code>trigger</code></td><td>Activation tests ensuring skill triggers correctly on valid queries and avoids false positives</td></tr>
       </table>
     </section>
 
@@ -1151,6 +1164,29 @@ function renderHowItWorksPage(): string {
       <p>Accuracy is calculated by matching response content against expected concepts:</p>
       <pre><code>accuracy = (matched_concepts / total_concepts) × 100%</code></pre>
       <p>The scorer uses fuzzy matching to handle variations like plurals, hyphens, and common abbreviations.</p>
+
+      <h3>Composite Score</h3>
+      <p>The leaderboard ranks skills by a composite score:</p>
+      <pre><code>composite = accuracy × 70% + security × 15% + trigger × 15%</code></pre>
+      <p>This balances core functionality (accuracy), safety (security), and activation precision (trigger).</p>
+
+      <h3>Trigger Score</h3>
+      <p>Trigger tests evaluate activation behavior:</p>
+      <pre><code>trigger = trigger_rate × (1 - false_positive_rate)</code></pre>
+      <p>Skills should activate on relevant queries and avoid activating on unrelated ones.</p>
+
+      <h3>Consistency Score</h3>
+      <p>Consistency metrics track result stability across runs (informational, not in composite):</p>
+      <ul>
+        <li><strong>Accuracy StdDev</strong> - Standard deviation of accuracy across runs</li>
+        <li><strong>Accuracy Range</strong> - Difference between best and worst accuracy</li>
+        <li><strong>Flaky Tests</strong> - Tests with inconsistent pass/fail results</li>
+      </ul>
+
+      <h3>Baseline Comparison</h3>
+      <p>Baseline delta shows performance change vs previous version (informational, not in composite):</p>
+      <pre><code>Δ accuracy = current_accuracy - baseline_accuracy
+Δ security = current_security - baseline_security</code></pre>
     </section>
 
     <section class="doc-section">
@@ -1375,6 +1411,9 @@ interface SkillResultRow {
   costUsd: number;
   toolCount: number | null;
   securityScore: number | null;
+  triggerScore: number | null;
+  consistencyJson: string | null;
+  baselineJson: string | null;
   createdAt: string | null;
   submitterGithub: string | null;
   skillshLink: string | null;
@@ -1386,6 +1425,7 @@ interface SkillResultRow {
 interface RadarMetrics {
   accuracy: number;
   security: number;
+  trigger: number;
   tokenEfficiency: number;
   costEfficiency: number;
   speed: number;
@@ -1403,6 +1443,7 @@ function computeRadarMetrics(skill: LeaderboardRow, results: SkillResultRow[]): 
   return {
     accuracy: Math.max(0, Math.min(100, skill.bestAccuracy)),
     security: Math.max(0, Math.min(100, skill.bestSecurity ?? 0)),
+    trigger: Math.max(0, Math.min(100, skill.bestTrigger ?? 0)),
     // 0 tokens = 100, 10K+ tokens = 0
     tokenEfficiency: Math.max(0, Math.min(100, 100 - (skill.avgTokens / 10000) * 100)),
     // $0 = 100, $0.10+ = 0
@@ -1417,11 +1458,11 @@ function computeRadarMetrics(skill: LeaderboardRow, results: SkillResultRow[]): 
  */
 function renderRadarChart(metrics: RadarMetrics): string {
   const cx = 180, cy = 160, maxR = 110;
-  const labels = ['Accuracy', 'Security', 'Tokens', 'Cost', 'Speed'];
-  const values = [metrics.accuracy, metrics.security, metrics.tokenEfficiency, metrics.costEfficiency, metrics.speed];
+  const labels = ['Accuracy', 'Security', 'Trigger', 'Tokens', 'Cost', 'Speed'];
+  const values = [metrics.accuracy, metrics.security, metrics.trigger, metrics.tokenEfficiency, metrics.costEfficiency, metrics.speed];
 
-  // 5 axes, starting from top (-90°), clockwise
-  const angles = labels.map((_, i) => (-90 + i * 72) * Math.PI / 180);
+  // 6 axes, starting from top (-90°), clockwise
+  const angles = labels.map((_, i) => (-90 + i * 60) * Math.PI / 180);
 
   function point(angle: number, r: number): string {
     return `${(cx + r * Math.cos(angle)).toFixed(1)},${(cy + r * Math.sin(angle)).toFixed(1)}`;
@@ -1483,12 +1524,19 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
   const radarMetrics = computeRadarMetrics(skill, results);
   const radarSvg = renderRadarChart(radarMetrics);
 
-  const resultRows = results.map((r, i) => `
+  const resultRows = results.map((r, i) => {
+    // Parse consistency and baseline data
+    const consistency = r.consistencyJson ? JSON.parse(r.consistencyJson) : null;
+    const baseline = r.baselineJson ? JSON.parse(r.baselineJson) : null;
+
+    return `
     <tr class="result-row" data-result-id="${escapeHtml(r.id)}">
       <td class="result-date">${r.createdAt ? formatRelativeTime(new Date(r.createdAt).getTime() / 1000) : '-'}</td>
       <td class="result-model">${escapeHtml(r.model)}</td>
       <td class="result-accuracy">${r.accuracy.toFixed(1)}%</td>
       <td class="result-security">${r.securityScore != null ? r.securityScore.toFixed(0) + '%' : '\u2014'}</td>
+      <td class="result-trigger">${r.triggerScore != null ? r.triggerScore.toFixed(0) + '%' : '\u2014'}</td>
+      <td class="result-consistency">${consistency ? `<span title="Std Dev: ${consistency.accuracyStdDev?.toFixed(1)}%, Range: ${consistency.accuracyRange?.toFixed(1)}%">${consistency.consistencyScore?.toFixed(0)}%</span>` : '\u2014'}</td>
       <td class="result-tokens">${r.tokensTotal?.toLocaleString() || '-'}</td>
       <td class="result-cost">$${r.costUsd?.toFixed(4) || '-'}</td>
       <td class="result-submitter">
@@ -1504,9 +1552,28 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
       </td>
     </tr>
     <tr class="result-detail" data-result-id="${escapeHtml(r.id)}">
-      <td colspan="8"><span class="detail-placeholder">Loading...</span></td>
+      <td colspan="10">
+        ${consistency || baseline ? `
+          <div class="additional-metrics">
+            ${consistency ? `
+              <div class="metric-section">
+                <strong>Consistency:</strong> Score ${consistency.consistencyScore?.toFixed(0)}%
+                (StdDev ${consistency.accuracyStdDev?.toFixed(1)}%, Range ${consistency.accuracyRange?.toFixed(1)}%)
+                ${consistency.flakyTests?.length ? `<br><span class="flaky-tests">Flaky tests: ${consistency.flakyTests.join(', ')}</span>` : ''}
+              </div>
+            ` : ''}
+            ${baseline ? `
+              <div class="metric-section">
+                <strong>Baseline Δ:</strong> Accuracy ${baseline.aggregatedDelta?.accuracy > 0 ? '+' : ''}${baseline.aggregatedDelta?.accuracy?.toFixed(1)}%,
+                Security ${baseline.aggregatedDelta?.security > 0 ? '+' : ''}${baseline.aggregatedDelta?.security?.toFixed(1)}%
+              </div>
+            ` : ''}
+          </div>
+        ` : '<span class="detail-placeholder">No additional metrics</span>'}
+      </td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   // Render test files viewer if available
   const testFilesSection = latestResult?.testFiles?.length ? `
@@ -1562,9 +1629,15 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
     .results-table td { padding: 0.75rem 0; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
     .result-accuracy { font-family: 'Geist Mono', monospace; font-weight: 500; }
     .result-security { font-family: 'Geist Mono', monospace; color: var(--text-secondary); }
+    .result-trigger { font-family: 'Geist Mono', monospace; color: var(--text-secondary); }
+    .result-consistency { font-family: 'Geist Mono', monospace; color: var(--text-secondary); cursor: help; }
     .result-tokens, .result-cost { font-family: 'Geist Mono', monospace; color: var(--text-secondary); }
     .security-warning { color: #d29922; font-size: 0.625rem; }
     .security-banner { background: rgba(210, 153, 34, 0.1); border: 1px solid rgba(210, 153, 34, 0.3); color: #d29922; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; font-size: 0.875rem; }
+    .additional-metrics { padding: 1rem; background: #0a0a0a; border-radius: 4px; font-size: 0.8125rem; }
+    .metric-section { margin-bottom: 0.5rem; }
+    .metric-section:last-child { margin-bottom: 0; }
+    .flaky-tests { color: var(--text-secondary); font-size: 0.75rem; }
     .submitter-link { display: flex; align-items: center; gap: 0.375rem; color: var(--text-secondary); text-decoration: none; font-size: 0.8125rem; }
     .submitter-link:hover { color: var(--text); }
     .submitter-avatar-sm { width: 16px; height: 16px; border-radius: 50%; }
@@ -1716,6 +1789,8 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
             <th>Model</th>
             <th>Accuracy</th>
             <th>Security</th>
+            <th>Trigger</th>
+            <th>Consistency</th>
             <th>Tokens</th>
             <th>Cost</th>
             <th>Submitter</th>

@@ -37,6 +37,12 @@ interface ResultPayload {
   repoUrl?: string;
   /** Benchmark report markdown */
   reportMarkdown?: string;
+  /** Trigger test score (0-100) */
+  triggerScore?: number;
+  /** Consistency metrics JSON */
+  consistencyJson?: string;
+  /** Baseline comparison JSON */
+  baselineJson?: string;
 }
 
 /** API key info returned from verification */
@@ -90,8 +96,9 @@ apiRouter.post('/results', async (c) => {
         id, skill_id, model, accuracy, tokens_total, tokens_input, tokens_output,
         duration_ms, cost_usd, tool_count, runs, hash, raw_json,
         submitter_github, test_files, skillsh_link,
-        security_score, security_json, repo_url, report_markdown
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        security_score, security_json, repo_url, report_markdown,
+        trigger_score, consistency_json, baseline_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       resultId,
       payload.skillId,
@@ -112,7 +119,10 @@ apiRouter.post('/results', async (c) => {
       payload.securityScore ?? null,
       payload.securityJson || null,
       payload.repoUrl || null,
-      payload.reportMarkdown || null
+      payload.reportMarkdown || null,
+      payload.triggerScore ?? null,
+      payload.consistencyJson || null,
+      payload.baselineJson || null
     ).run();
 
     // Update API key last used
@@ -152,6 +162,7 @@ apiRouter.get('/leaderboard', async (c) => {
         source,
         best_accuracy as bestAccuracy,
         best_security as bestSecurity,
+        best_trigger as bestTrigger,
         composite_score as compositeScore,
         best_model as bestModel,
         repo_url as repoUrl,
@@ -193,6 +204,7 @@ apiRouter.get('/skill/:name', async (c) => {
         source,
         best_accuracy as bestAccuracy,
         best_security as bestSecurity,
+        best_trigger as bestTrigger,
         composite_score as compositeScore,
         best_model as bestModel,
         repo_url as repoUrl,
@@ -219,6 +231,9 @@ apiRouter.get('/skill/:name', async (c) => {
         cost_usd as costUsd,
         tool_count as toolCount,
         security_score as securityScore,
+        trigger_score as triggerScore,
+        consistency_json as consistencyJson,
+        baseline_json as baselineJson,
         created_at as date
       FROM results
       WHERE skill_id = ?
@@ -235,6 +250,9 @@ apiRouter.get('/skill/:name', async (c) => {
       costUsd: row.costUsd ?? null,
       toolCount: row.toolCount ?? null,
       securityScore: row.securityScore ?? null,
+      triggerScore: row.triggerScore ?? null,
+      consistencyJson: row.consistencyJson ?? null,
+      baselineJson: row.baselineJson ?? null,
       date: row.date ? new Date((row.date as number) * 1000).toISOString() : null,
     })) || [];
 
