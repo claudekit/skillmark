@@ -1,5 +1,19 @@
 # @skillmark/cli
 
+## 0.5.0
+
+### Minor Changes
+
+- Auto-release from conventional commits
+
+  - fix(ci): fix release workflow to publish on version bump and add npm README
+  - feat(webapp): add trigger metrics, consistency tracking, and baseline comparison to leaderboard
+  - feat(cli): add trigger test type, consistency metrics, and performance baseline features
+  - feat(cli): add AUP compliance validator and enhance test generation
+  - feat(cli): upload report markdown on publish
+  - feat(webapp): add benchmark report viewing modal
+  - feat(cli): add comprehensive benchmark report generator
+
 ## 0.4.0
 
 ### Minor Changes
