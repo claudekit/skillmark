@@ -44,6 +44,7 @@ program
   .option('-c, --prompt-context <text>', 'Additional prompt context for test auto-generation')
   .option('--generate-model <model>', 'Model for test generation (haiku|sonnet|opus)', 'opus')
   .option('--parallel', 'Run tests in parallel (concurrent Claude CLI processes)')
+  .option('--with-baseline', 'Run baseline comparison (tests without skill for comparison)')
   .action(async (skillSource: string, options) => {
     try {
       // Validate model
@@ -79,6 +80,7 @@ program
         promptContext: options.promptContext,
         generateModel: genModel as 'haiku' | 'sonnet' | 'opus',
         parallel: options.parallel,
+        withBaseline: options.withBaseline ?? false,
       });
 
       // Auto-publish unless --no-publish is passed

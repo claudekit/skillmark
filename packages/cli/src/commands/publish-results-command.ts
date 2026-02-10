@@ -152,6 +152,10 @@ async function uploadResult(
       securityScore: result.securityScore?.securityScore ?? undefined,
       securityJson: result.securityScore ? JSON.stringify(result.securityScore) : undefined,
       repoUrl: result.repoUrl || undefined,
+      // Add new metrics if available
+      ...(result.triggerScore && { triggerScore: result.triggerScore.triggerScore }),
+      ...(result.consistency && { consistencyJson: JSON.stringify(result.consistency) }),
+      ...(result.baseline && { baselineJson: JSON.stringify(result.baseline) }),
     }),
   });
 
@@ -341,6 +345,10 @@ async function uploadResultWithExtras(
       securityJson: result.securityScore ? JSON.stringify(result.securityScore) : undefined,
       repoUrl: result.repoUrl || undefined,
       reportMarkdown: reportMarkdown || undefined,
+      // Add new metrics if available
+      ...(result.triggerScore && { triggerScore: result.triggerScore.triggerScore }),
+      ...(result.consistency && { consistencyJson: JSON.stringify(result.consistency) }),
+      ...(result.baseline && { baselineJson: JSON.stringify(result.baseline) }),
     }),
   });
 

@@ -71,9 +71,11 @@ export function generateMarkdownReport(result: BenchmarkResult): string {
 
   let md = buildExecutiveSummary(result, grade, passCount, totalTests, composite);
   md += buildTestResults(byTest);
-  if (result.runs > 1) md += buildConsistencyAnalysis(byTest);
+  if (result.runs > 1) md += buildConsistencyAnalysis(byTest, result);
   md += buildConceptCoverage(result.testResults);
   if (result.securityScore) md += buildSecurityAnalysis(result.securityScore, composite!);
+  if (result.triggerScore) md += buildTriggerAnalysis(result.triggerScore);
+  if (result.baseline) md += buildBaselineComparison(result.baseline);
   md += buildPerformanceAnalysis(m, totalTests, result.runs);
   if (strongTests.length > 0 || weakTests.length > 0) {
     md += buildStrengthsWeaknesses(strongTests, weakTests);
@@ -171,8 +173,25 @@ function buildTestResults(byTest: Map<string, TestGroup>): string {
 }
 
 /** Run consistency analysis (multi-run only) */
-function buildConsistencyAnalysis(byTest: Map<string, TestGroup>): string {
+function buildConsistencyAnalysis(byTest: Map<string, TestGroup>, result?: BenchmarkResult): string {
   let md = `---\n\n## Run Consistency Analysis\n\n`;
+
+  // Use structured ConsistencyMetrics if available
+  if (result?.consistency) {
+    const c = result.consistency;
+    md += `**Overall Consistency Metrics:**\n\n`;
+    md += `| Metric | Value |\n|--------|-------|\n`;
+    md += `| Consistency Score | **${c.consistencyScore.toFixed(1)}%** |\n`;
+    md += `| Avg Std Dev | ${c.accuracyStdDev.toFixed(1)}pp |\n`;
+    md += `| Avg Range | ${c.accuracyRange.toFixed(1)}pp |\n`;
+    md += `| Concept Overlap | ${c.conceptOverlap.toFixed(1)}% |\n`;
+    if (c.flakyTests.length > 0) {
+      md += `| Flaky Tests | ${c.flakyTests.length} |\n`;
+    }
+    md += `\n**Per-Test Breakdown:**\n\n`;
+  }
+
+  // Per-test breakdown (backwards compatible)
   for (const group of byTest.values()) {
     if (group.results.length <= 1) continue;
     const accuracies = group.results.map(r => r.metrics.accuracy);
@@ -182,7 +201,8 @@ function buildConsistencyAnalysis(byTest: Map<string, TestGroup>): string {
     const avg = accuracies.reduce((a, b) => a + b, 0) / accuracies.length;
     const variance = accuracies.reduce((s, a) => s + (a - avg) ** 2, 0) / accuracies.length;
     const stdDev = Math.sqrt(variance);
-    md += `- **${group.name}**: avg ${avg.toFixed(1)}%, range ${min.toFixed(0)}-${max.toFixed(0)}%, spread ${spread.toFixed(0)}pp, σ=${stdDev.toFixed(1)}\n`;
+    const flakyMarker = spread > 20 ? ' ⚠️ FLAKY' : '';
+    md += `- **${group.name}**: avg ${avg.toFixed(1)}%, range ${min.toFixed(0)}-${max.toFixed(0)}%, spread ${spread.toFixed(0)}pp, σ=${stdDev.toFixed(1)}${flakyMarker}\n`;
   }
   return md + `\n`;
 }
@@ -225,6 +245,81 @@ function buildSecurityAnalysis(s: BenchmarkResult['securityScore'] & object, com
     }
     md += '\n';
   }
+  return md;
+}
+
+/** Trigger analysis section */
+function buildTriggerAnalysis(t: import('../types/index.js').TriggerScore): string {
+  let md = `---\n\n## Trigger Analysis\n\n`;
+  md += `| Metric | Value |\n|--------|-------|\n`;
+  md += `| Trigger Rate | **${t.triggerRate.toFixed(1)}%** (${t.queryResults.filter(q => q.expected === 'activate' && q.correct).length}/${t.queryResults.filter(q => q.expected === 'activate').length} positive activated) |\n`;
+  md += `| False Positive Rate | ${t.falsePositiveRate.toFixed(1)}% (${t.queryResults.filter(q => q.expected === 'ignore' && !q.correct).length}/${t.queryResults.filter(q => q.expected === 'ignore').length} negative activated) |\n`;
+  md += `| Trigger Score | **${t.triggerScore.toFixed(1)}%** |\n\n`;
+
+  md += `### Query Results\n\n`;
+  md += `| Query | Expected | Actual | Correct | Tools |\n|-------|----------|--------|---------|-------|\n`;
+  for (const query of t.queryResults) {
+    const icon = query.correct ? '✅' : '❌';
+    const queryShort = query.query.length > 60 ? query.query.slice(0, 57) + '...' : query.query;
+    md += `| ${queryShort} | ${query.expected} | ${icon} ${query.actual} | ${query.correct ? 'Yes' : 'No'} | ${query.toolCount} |\n`;
+  }
+  md += '\n';
+  return md;
+}
+
+/** Baseline comparison section */
+function buildBaselineComparison(b: import('../types/index.js').BaselineComparison): string {
+  let md = `---\n\n## Baseline Comparison (With Skill vs Without)\n\n`;
+  md += `> This analysis compares performance with and without the skill to quantify its value.\n\n`;
+
+  const d = b.aggregatedDelta;
+
+  md += `### Aggregated Impact\n\n`;
+  md += `| Metric | With Skill | Without Skill | Delta |\n|--------|-----------|---------------|-------|\n`;
+
+  // Calculate average with/without metrics from per-test data
+  const avgWithSkill = {
+    accuracy: b.tests.reduce((s, t) => s + t.withSkill.accuracy, 0) / (b.tests.length || 1),
+    tokens: b.tests.reduce((s, t) => s + t.withSkill.tokensTotal, 0) / (b.tests.length || 1),
+    tools: b.tests.reduce((s, t) => s + t.withSkill.toolCount, 0) / (b.tests.length || 1),
+    cost: b.tests.reduce((s, t) => s + t.withSkill.costUsd, 0) / (b.tests.length || 1),
+    duration: b.tests.reduce((s, t) => s + t.withSkill.durationMs, 0) / (b.tests.length || 1),
+  };
+
+  const avgWithoutSkill = {
+    accuracy: b.tests.reduce((s, t) => s + t.withoutSkill.accuracy, 0) / (b.tests.length || 1),
+    tokens: b.tests.reduce((s, t) => s + t.withoutSkill.tokensTotal, 0) / (b.tests.length || 1),
+    tools: b.tests.reduce((s, t) => s + t.withoutSkill.toolCount, 0) / (b.tests.length || 1),
+    cost: b.tests.reduce((s, t) => s + t.withoutSkill.costUsd, 0) / (b.tests.length || 1),
+    duration: b.tests.reduce((s, t) => s + t.withoutSkill.durationMs, 0) / (b.tests.length || 1),
+  };
+
+  const formatDelta = (value: number, suffix: string, inverse = false, precision = 1) => {
+    const sign = value > 0 ? '+' : '';
+    const color = (inverse ? value < 0 : value > 0) ? '**' : '';
+    return `${color}${sign}${value.toFixed(precision)}${suffix}${color}`;
+  };
+
+  md += `| Accuracy | ${avgWithSkill.accuracy.toFixed(1)}% | ${avgWithoutSkill.accuracy.toFixed(1)}% | ${formatDelta(d.accuracyDelta, 'pp')} |\n`;
+  md += `| Tokens | ${Math.round(avgWithSkill.tokens).toLocaleString()} | ${Math.round(avgWithoutSkill.tokens).toLocaleString()} | ${formatDelta(d.tokenReduction, '%')} |\n`;
+  md += `| Tool Calls | ${Math.round(avgWithSkill.tools)} | ${Math.round(avgWithoutSkill.tools)} | ${formatDelta(d.toolCountDelta, '')} |\n`;
+  md += `| Cost | $${avgWithSkill.cost.toFixed(4)} | $${avgWithoutSkill.cost.toFixed(4)} | ${formatDelta(d.costDelta, '', true, 4)} |\n`;
+  md += `| Duration | ${(avgWithSkill.duration / 1000).toFixed(1)}s | ${(avgWithoutSkill.duration / 1000).toFixed(1)}s | ${formatDelta(d.durationDelta / 1000, 's', true)} |\n\n`;
+
+  md += `### Per-Test Breakdown\n\n`;
+  md += `<details>\n<summary>Individual test comparisons (${b.tests.length} tests)</summary>\n\n`;
+
+  for (const test of b.tests) {
+    md += `#### ${test.testName}\n\n`;
+    md += `| Metric | With Skill | Without Skill | Delta |\n|--------|-----------|---------------|-------|\n`;
+    md += `| Accuracy | ${test.withSkill.accuracy.toFixed(1)}% | ${test.withoutSkill.accuracy.toFixed(1)}% | ${formatDelta(test.delta.accuracyDelta, 'pp')} |\n`;
+    md += `| Tokens | ${test.withSkill.tokensTotal.toLocaleString()} | ${test.withoutSkill.tokensTotal.toLocaleString()} | ${formatDelta(test.delta.tokenReduction, '%')} |\n`;
+    md += `| Tools | ${test.withSkill.toolCount} | ${test.withoutSkill.toolCount} | ${formatDelta(test.delta.toolCountDelta, '')} |\n`;
+    md += `| Cost | $${test.withSkill.costUsd.toFixed(4)} | $${test.withoutSkill.costUsd.toFixed(4)} | ${formatDelta(test.delta.costDelta, '', true, 4)} |\n`;
+    md += `| Duration | ${(test.withSkill.durationMs / 1000).toFixed(1)}s | ${(test.withoutSkill.durationMs / 1000).toFixed(1)}s | ${formatDelta(test.delta.durationDelta / 1000, 's', true)} |\n\n`;
+  }
+
+  md += `</details>\n\n`;
   return md;
 }
 
@@ -364,6 +459,25 @@ export function printConsoleSummary(result: BenchmarkResult): void {
     console.log(`${chalk.gray('Composite:')} ${composite.toFixed(1)}% (80% accuracy + 20% security)`);
   }
 
+  if (result.triggerScore) {
+    const t = result.triggerScore;
+    const triggerColor = t.triggerScore >= 80 ? chalk.green : t.triggerScore >= 50 ? chalk.yellow : chalk.red;
+    console.log('');
+    console.log(`${chalk.gray('Trigger:')}   ${triggerColor(t.triggerScore.toFixed(1) + '%')} (trigger: ${t.triggerRate.toFixed(0)}%, FP: ${t.falsePositiveRate.toFixed(0)}%)`);
+  }
+
+  if (result.baseline) {
+    const b = result.baseline.aggregatedDelta;
+    console.log('');
+    console.log(chalk.bold('── Baseline Impact ──'));
+    const accColor = b.accuracyDelta >= 0 ? chalk.green : chalk.red;
+    const tokenColor = b.tokenReduction >= 0 ? chalk.green : chalk.red;
+    const costColor = b.costDelta >= 0 ? chalk.green : chalk.red;
+    console.log(`  Accuracy:  ${accColor((b.accuracyDelta >= 0 ? '+' : '') + b.accuracyDelta.toFixed(1) + 'pp')}`);
+    console.log(`  Tokens:    ${tokenColor((b.tokenReduction >= 0 ? '+' : '') + b.tokenReduction.toFixed(1) + '% reduction')}`);
+    console.log(`  Cost:      ${costColor((b.costDelta >= 0 ? '' : '') + '$' + Math.abs(b.costDelta).toFixed(4) + (b.costDelta >= 0 ? ' savings' : ' increase'))}`);
+  }
+
   // Test-by-Test Breakdown
   console.log(chalk.bold('\n── Test Results ──\n'));
   const byTest = groupByTest(result.testResults);
@@ -400,6 +514,20 @@ export function printConsoleSummary(result: BenchmarkResult): void {
   const totalTests = passCount + failCount;
   const passRate = totalTests > 0 ? (passCount / totalTests * 100).toFixed(0) : '0';
   console.log(chalk.gray(`\n  Pass rate: ${passCount}/${totalTests} (${passRate}%)`));
+
+  // Display flaky test warnings
+  if (result.consistency?.flakyTests && result.consistency.flakyTests.length > 0) {
+    console.log('');
+    for (const testName of result.consistency.flakyTests) {
+      // Find test group to get range
+      const group = byTest.get(testName);
+      if (group) {
+        const accuracies = group.results.map(r => r.metrics.accuracy);
+        const range = Math.max(...accuracies) - Math.min(...accuracies);
+        console.log(chalk.yellow(`  ⚠ Flaky: ${testName} (accuracy range ${range.toFixed(0)}pp)`));
+      }
+    }
+  }
 
   // Analysis & Insights
   console.log(chalk.bold('\n── Analysis & Insights ──\n'));
