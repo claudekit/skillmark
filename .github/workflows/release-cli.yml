@@ -9,8 +9,6 @@ concurrency: ${{ github.workflow }}-${{ github.ref }}
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Skip version bump commits to avoid infinite loop
-    if: "${{ github.event.head_commit.message != 'chore: version packages' }}"
     permissions:
       contents: write
       pull-requests: write
@@ -36,6 +34,7 @@ jobs:
         run: pnpm --filter @skillmark/cli build
 
       - name: Auto-generate changeset from commits
+        if: "!startsWith(github.event.head_commit.message, 'chore: version packages')"
         run: |
           # Skip if changesets already exist
           if ls .changeset/*.md 2>/dev/null | grep -v README.md | grep -q .; then
