@@ -16,12 +16,15 @@ skillmark/
 │   │   │   │   ├── markdown-test-definition-parser.ts
 │   │   │   │   ├── concept-accuracy-scorer.ts
 │   │   │   │   ├── security-test-scorer.ts
+│   │   │   │   ├── trigger-activation-scorer.ts
+│   │   │   │   ├── consistency-variance-scorer.ts
 │   │   │   │   ├── claude-cli-executor.ts
 │   │   │   │   ├── skill-content-collector.ts
 │   │   │   │   ├── skill-creator-invoker.ts
 │   │   │   │   ├── transcript-jsonl-parser.ts
 │   │   │   │   ├── enhanced-test-prompt-builder.ts
-│   │   │   │   └── retry-with-degrade-utils.ts
+│   │   │   │   ├── retry-with-degrade-utils.ts
+│   │   │   │   └── run-benchmark-command.test.ts
 │   │   │   ├── sources/
 │   │   │   │   ├── unified-skill-source-resolver.ts
 │   │   │   │   ├── local-skill-source-handler.ts
@@ -182,6 +185,9 @@ Response: skill details + 10 recent runs
 
 ### BenchmarkMetrics
 - `accuracy`: 0-100% (concepts_matched / total_concepts)
+- `securityScore`: 0-100% (refusal × (1 - leakage/100))
+- `triggerScore`: 0-100% (activation × precision)
+- `consistencyScore`: 0-100% (based on stdDev, range, conceptOverlap)
 - `tokensTotal`: input + output tokens
 - `tokensInput`: prompt tokens
 - `tokensOutput`: response tokens
@@ -216,14 +222,16 @@ Aggregated results across all tests/runs:
 ## Command Implementation
 
 ### run-benchmark-command.ts
-1. Parse options (tests, model, runs, output, verbose)
+1. Parse options (tests, model, runs, output, verbose, with-baseline)
 2. Resolve skill source via resolveSkillSource()
 3. Load tests via loadTestsFromDirectory() or discoverTests()
-4. Execute tests via executeTest() for each test × run
-5. Score responses via scoreResponse()
-6. Aggregate metrics via aggregateMetrics()
-7. Write result.json and report.md
-8. Optional: Invoke skill-creator for enhanced analysis
+4. (Optional) Execute baseline tests without skill if --with-baseline
+5. Execute tests via executeTest() for each test × run
+6. Score responses via scoreResponse() (accuracy, security, trigger)
+7. Calculate variance metrics via consistency-variance-scorer
+8. Aggregate metrics via aggregateMetrics()
+9. Write result.json and report.md
+10. Optional: Invoke skill-creator for enhanced analysis
 
 **Key Options:**
 - `-m, --model`: haiku|sonnet|opus (required)
@@ -231,6 +239,7 @@ Aggregated results across all tests/runs:
 - `-t, --tests`: explicit test directory
 - `-o, --output`: result directory (default: ./skillmark-results)
 - `-v, --verbose`: detailed progress output
+- `--with-baseline`: run baseline tests (without skill) for delta metrics
 
 ### publish-results-command.ts
 1. Read result.json file
