@@ -1,5 +1,22 @@
 # skillmark
 
+## 0.6.0
+
+### Minor Changes
+
+- Auto-release from conventional commits
+
+  - fix(ci): fix release workflow to publish on version bump and add npm README
+  - feat(webapp): add trigger metrics, consistency tracking, and baseline comparison to leaderboard
+  - feat(cli): add trigger test type, consistency metrics, and performance baseline features
+  - feat(cli): add AUP compliance validator and enhance test generation
+  - feat(cli): upload report markdown on publish
+  - feat(webapp): add benchmark report viewing modal
+  - feat(cli): add comprehensive benchmark report generator
+  - feat(cli): add generate-tests command and prompt context options
+  - feat(cli): add --generate-tests flag for regenerating tests from SKILL.md
+  - feat(cli, webapp): add auto-publish, expandable results, and security radar chart
+
 ## 0.5.0
 
 ### Minor Changes

@@ -1,6 +1,6 @@
 {
   "name": "skillmark",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "CLI tool for benchmarking Claude agent skills",
   "type": "module",
   "bin": {
