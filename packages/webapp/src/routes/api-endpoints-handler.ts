@@ -256,13 +256,18 @@ apiRouter.get('/skill/:name', async (c) => {
       date: row.date ? new Date((row.date as number) * 1000).toISOString() : null,
     })) || [];
 
-    return c.json({
+    const response = c.json({
       ...skill,
       lastTested: skill.lastTested
         ? new Date((skill.lastTested as number) * 1000).toISOString()
         : null,
       history: formattedHistory,
     });
+
+    // Cache for 1 hour — used by embed widget and external consumers
+    response.headers.set('Cache-Control', 'public, max-age=3600, s-maxage=3600');
+
+    return response;
   } catch (error) {
     console.error('Error fetching skill:', error);
     return c.json({ error: 'Internal server error' }, 500);

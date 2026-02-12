@@ -25,10 +25,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Lint CLI
-        run: pnpm --filter @skillmark/cli lint
+        run: pnpm --filter skillmark lint
 
       - name: Build CLI
-        run: pnpm --filter @skillmark/cli build
+        run: pnpm --filter skillmark build
 
       - name: Test CLI
-        run: pnpm --filter @skillmark/cli test
+        run: pnpm --filter skillmark test

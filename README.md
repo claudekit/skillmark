@@ -168,7 +168,7 @@ curl https://skillmark.workers.dev/api/skill/my-skill
 pnpm install
 
 # Build CLI
-pnpm --filter @skillmark/cli build
+pnpm --filter skillmark build
 
 # Run webapp locally
 pnpm --filter @skillmark/webapp dev

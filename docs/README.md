@@ -88,7 +88,7 @@ Developer ──creates tests──> Skill ──runs benchmark──> Metrics
 ```
 
 **Three main components:**
-1. **CLI Tool** (@skillmark/cli) - Run benchmarks locally
+1. **CLI Tool** (skillmark) - Run benchmarks locally
 2. **API** (@skillmark/webapp) - Submit results, view rankings
 3. **Leaderboard UI** - Public skill rankings
 
@@ -223,7 +223,7 @@ pnpm tsc --noEmit
 ### Deployment
 ```bash
 # CLI to npm
-pnpm --filter @skillmark/cli build
+pnpm --filter skillmark build
 npm publish
 
 # Webapp to Cloudflare

@@ -44,7 +44,7 @@ Skillmark is a benchmarking platform for evaluating Claude AI skill effectivenes
 
 ## Functional Requirements
 
-### CLI Package (@skillmark/cli)
+### CLI Package (skillmark)
 
 1. **Skill Source Resolution**
    - Local filesystem paths: `/path/to/skill`, `./skill`, `~/skill`
@@ -177,7 +177,7 @@ totalRuns: number
 
 ```
 ┌─ npm Registry ─────┐
-│  @skillmark/cli    │
+│  skillmark    │
 └────────────────────┘
          ▲
          │ npm install -g skillmark

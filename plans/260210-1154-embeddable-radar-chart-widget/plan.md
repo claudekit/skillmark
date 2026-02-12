@@ -1,5 +1,5 @@
 ---
-status: pending
+status: complete
 created: 2026-02-10
 slug: embeddable-radar-chart-widget
 brainstorm: plans/reports/brainstorm-260210-1154-embeddable-radar-chart-widget.md

@@ -23,7 +23,7 @@ Phase 4: Scale & Polish  [░░░░░░░░░░░░░░] Planned
 **Target:** Late February 2025
 **Success Criteria:** CLI functional, API working, basic leaderboard UI
 
-### CLI Package (@skillmark/cli)
+### CLI Package (skillmark)
 
 #### Sprint 1A: Skill Source Resolution ✓ Complete
 - [x] Local filesystem handler
@@ -101,7 +101,7 @@ Phase 4: Scale & Polish  [░░░░░░░░░░░░░░] Planned
 - [x] System architecture
 - [x] Project roadmap
 - [ ] Deployment guide
-- [ ] API reference (swagger)
+- [x] API reference (`docs/api-reference.md`)
 
 ### Success Metrics (Phase 1)
 
@@ -262,7 +262,7 @@ Phase 4: Scale & Polish  [░░░░░░░░░░░░░░] Planned
 - [ ] Accessibility audit (WCAG 2.1)
 
 ### Documentation
-- [ ] API reference (OpenAPI/Swagger)
+- [x] API reference (`docs/api-reference.md`)
 - [ ] SDK libraries (JavaScript/Python)
 - [ ] Video tutorials
 - [ ] Blog posts & case studies
