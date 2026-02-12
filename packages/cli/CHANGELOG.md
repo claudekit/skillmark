@@ -1,4 +1,4 @@
-# @skillmark/cli
+# skillmark
 
 ## 0.5.0
 

@@ -1,4 +1,4 @@
-# @skillmark/cli
+# skillmark
 
 CLI tool for benchmarking Claude AI agent skills with standardized test suites and public leaderboards.
 
@@ -7,9 +7,9 @@ CLI tool for benchmarking Claude AI agent skills with standardized test suites a
 ## Installation
 
 ```bash
-npm install -g @skillmark/cli
+npm install -g skillmark
 # or
-npx @skillmark/cli
+npx skillmark
 ```
 
 ## Usage

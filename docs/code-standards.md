@@ -607,7 +607,7 @@ try {
 
 ### README in Each Package
 ```markdown
-# @skillmark/cli
+# skillmark
 
 Node.js CLI for Skillmark benchmarking.
 

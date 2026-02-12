@@ -23,7 +23,7 @@ Phase 4: Scale & Polish  [░░░░░░░░░░░░░░] Planned
 **Target:** Late February 2025
 **Success Criteria:** CLI functional, API working, basic leaderboard UI
 
-### CLI Package (@skillmark/cli)
+### CLI Package (skillmark)
 
 #### Sprint 1A: Skill Source Resolution ✓ Complete
 - [x] Local filesystem handler

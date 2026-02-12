@@ -3,7 +3,7 @@
 ## Overview
 
 Skillmark consists of two independently deployed packages:
-1. **@skillmark/cli** - Published to npm registry (global CLI tool)
+1. **skillmark** - Published to npm registry (global CLI tool)
 2. **@skillmark/webapp** - Deployed to Cloudflare Workers (serverless API + UI)
 
 This guide covers deployment procedures for both packages.
@@ -47,7 +47,7 @@ export CF_ACCOUNT_ID=<your-cloudflare-account-id>
 
 ---
 
-## Part 1: CLI Package Deployment (@skillmark/cli)
+## Part 1: CLI Package Deployment (skillmark)
 
 ### Autonomous Release with Changesets
 
@@ -99,7 +99,7 @@ If a manual changeset exists, auto-generation is skipped.
 pnpm install
 
 # Build CLI package
-pnpm --filter @skillmark/cli build
+pnpm --filter skillmark build
 
 # Verify build output
 ls -la packages/cli/dist/
@@ -138,7 +138,7 @@ cd packages/cli
 
 # Verify package.json metadata
 cat package.json | grep -A5 '"name"'
-# Should show: "@skillmark/cli", "version": "0.2.0", etc.
+# Should show: "skillmark", "version": "0.2.0", etc.
 
 # Dry run (preview what will be published)
 npm publish --dry-run
@@ -147,17 +147,17 @@ npm publish --dry-run
 npm publish --access public
 
 # Verify publication
-npm view @skillmark/cli
+npm view skillmark
 
 # Check published files
-npm view @skillmark/cli files
+npm view skillmark files
 ```
 
 ### Step 5: Verify npm Installation
 
 ```bash
 # Test global install
-npm install -g @skillmark/cli
+npm install -g skillmark
 
 # Test CLI from anywhere
 skillmark --version
@@ -171,10 +171,10 @@ skillmark run --help
 
 ```bash
 # If publication failed or needs rollback
-npm unpublish @skillmark/cli@0.2.0
+npm unpublish skillmark@0.2.0
 
 # Or deprecate version (don't remove):
-npm deprecate @skillmark/cli@0.2.0 "Use v0.2.1 instead"
+npm deprecate skillmark@0.2.0 "Use v0.2.1 instead"
 
 # Fix issue and re-publish with new version
 npm version patch
@@ -483,7 +483,7 @@ Push to main (feat:/fix:/etc.)
 **Key workflow steps:**
 1. Checkout with `fetch-depth: 0` (full history for tag detection)
 2. Build CLI
-3. Auto-generate changeset if none exist (reads commits since last `@skillmark/cli@*` tag)
+3. Auto-generate changeset if none exist (reads commits since last `skillmark@*` tag)
 4. `changesets/action` creates version PR or publishes
 
 **Required permissions:** `contents: write`, `pull-requests: write`
@@ -508,8 +508,8 @@ Set these in GitHub repository Settings > Secrets:
 |-------|-------|----------|
 | "package not found" | Not published yet | Run `npm publish --access public` |
 | "403 Forbidden" | No npm access | Contact org owner or check token |
-| "dist/ empty" | Build failed | Run `pnpm --filter @skillmark/cli build` |
-| "npm install -g" fails | Package missing | Check npm registry: `npm view @skillmark/cli` |
+| "dist/ empty" | Build failed | Run `pnpm --filter skillmark build` |
+| "npm install -g" fails | Package missing | Check npm registry: `npm view skillmark` |
 
 ### Webapp Deployment Issues
 
@@ -544,7 +544,7 @@ wrangler d1 execute skillmark-db --command "SELECT 1"
 ### CLI Release
 - [ ] Version updated in package.json
 - [ ] Built successfully (`dist/` has files)
-- [ ] Tested locally (`npm install -g @skillmark/cli`)
+- [ ] Tested locally (`npm install -g skillmark`)
 - [ ] Published to npm (`npm publish`)
 - [ ] Verified on npm registry
 - [ ] Git tag created and pushed
@@ -575,10 +575,10 @@ wrangler d1 execute skillmark-db --command "SELECT 1"
 ### Monitor CLI Usage
 ```bash
 # Check npm download stats
-curl https://api.npmjs.org/downloads/point/last-month/@skillmark/cli
+curl https://api.npmjs.org/downloads/point/last-month/skillmark
 
 # Check for issues
-npm audit @skillmark/cli
+npm audit skillmark
 ```
 
 ### Monitor Webapp Performance
@@ -635,8 +635,8 @@ pnpm deploy
 
 **CLI:**
 ```bash
-npm deprecate @skillmark/cli@<bad-version> "Critical bug, use v<good-version>"
-npm unpublish @skillmark/cli@<bad-version>
+npm deprecate skillmark@<bad-version> "Critical bug, use v<good-version>"
+npm unpublish skillmark@<bad-version>
 ```
 
 **Webapp:**

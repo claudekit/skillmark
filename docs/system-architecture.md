@@ -22,7 +22,7 @@
          │
          ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  @skillmark/cli (Node.js Package)                                    │
+│  skillmark (Node.js Package)                                    │
 ├──────────────────────────────────────────────────────────────────────┤
 │                                                                       │
 │  ┌─────────────────────────────────────────────────────────────┐   │
@@ -680,11 +680,11 @@ const timeout_id = setTimeout(() => controller.abort(), timeout);
 │ • npm run build                       │
 │ • Local testing                       │
 │ • Commit to git                       │
-└─ npm publish @skillmark/cli ──────────┘
+└─ npm publish skillmark ──────────┘
                   │
                   ▼
 ┌─ npm Registry ────────────────────────┐
-│ • @skillmark/cli@0.1.0                │
+│ • skillmark@0.1.0                │
 │ • dist/ published                     │
 └─────────────────────────────────────┬─┘
                                       │

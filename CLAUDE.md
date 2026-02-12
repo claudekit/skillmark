@@ -21,7 +21,7 @@ Skillmark is a benchmarking platform for evaluating Claude AI skill effectivenes
 
 **pnpm workspace** with 2 packages:
 
-1. **@skillmark/cli** (~3,900 lines TypeScript)
+1. **skillmark** (~3,900 lines TypeScript)
    - Node.js >=18.0.0 package
    - CLI tool for benchmark execution
    - Published to npm registry as global CLI
@@ -52,7 +52,7 @@ pnpm install              # Install all workspace dependencies
 
 # Build
 pnpm build                # Build both packages
-pnpm --filter @skillmark/cli build    # Build CLI only
+pnpm --filter skillmark build    # Build CLI only
 pnpm --filter @skillmark/webapp build # Build webapp only
 
 # Linting

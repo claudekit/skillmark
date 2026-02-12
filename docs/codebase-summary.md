@@ -5,7 +5,7 @@
 ```
 skillmark/
 ├── packages/
-│   ├── cli/                          # CLI Package (@skillmark/cli)
+│   ├── cli/                          # CLI Package (skillmark)
 │   │   ├── src/
 │   │   │   ├── cli-entry-point.ts         # Main CLI router
 │   │   │   ├── commands/
@@ -64,7 +64,7 @@ skillmark/
 
 ## Core Packages
 
-### CLI Package (@skillmark/cli)
+### CLI Package (skillmark)
 **Purpose:** CLI tool for running benchmarks and publishing results
 
 **Size:** ~3,900 lines of TypeScript
@@ -369,7 +369,7 @@ pnpm build               # Build both packages
 pnpm lint                # Lint TypeScript
 
 # CLI specific
-pnpm --filter @skillmark/cli build    # TypeScript → JavaScript
+pnpm --filter skillmark build    # TypeScript → JavaScript
 npm publish              # Publish to npm registry
 
 # Webapp specific
