@@ -1,7 +1,7 @@
 /**
  * Concept accuracy scorer - calculates how well responses match expected concepts
  */
-import type { TestDefinition, TestResult, BenchmarkMetrics } from '../types/index.js';
+import type { TestDefinition, TestResult, BenchmarkMetrics, ConsistencyMetrics } from '../types/index.js';
 
 /** Scoring options */
 export interface ScoringOptions {
@@ -224,4 +224,98 @@ export function calculatePassRate(results: TestResult[]): number {
   if (results.length === 0) return 0;
   const passed = results.filter((r) => r.passed).length;
   return (passed / results.length) * 100;
+}
+
+/**
+ * Compute consistency metrics from multi-run test results.
+ * Returns null if all tests have only single run.
+ */
+export function computeConsistencyMetrics(results: TestResult[]): ConsistencyMetrics | null {
+  // Group results by test name
+  const byTest = new Map<string, TestResult[]>();
+  for (const result of results) {
+    const testName = result.test.name;
+    if (!byTest.has(testName)) {
+      byTest.set(testName, []);
+    }
+    byTest.get(testName)!.push(result);
+  }
+
+  // Filter out tests with single run
+  const multiRunTests = Array.from(byTest.entries()).filter(([, runs]) => runs.length > 1);
+
+  // Return null if no multi-run tests
+  if (multiRunTests.length === 0) {
+    return null;
+  }
+
+  // Compute per-test stats
+  const testStats: {
+    stdDev: number;
+    range: number;
+    conceptOverlap: number;
+    isFlaky: boolean;
+    name: string;
+  }[] = [];
+
+  for (const [testName, runs] of multiRunTests) {
+    // Compute accuracy stats
+    const accuracies = runs.map(r => r.metrics.accuracy);
+    const min = Math.min(...accuracies);
+    const max = Math.max(...accuracies);
+    const range = max - min;
+    const avg = accuracies.reduce((a, b) => a + b, 0) / accuracies.length;
+    const variance = accuracies.reduce((s, a) => s + (a - avg) ** 2, 0) / accuracies.length;
+    const stdDev = Math.sqrt(variance);
+
+    // Compute concept overlap
+    // Intersection: concepts matched in ALL runs
+    // Union: concepts matched in ANY run
+    const allMatchedConcepts = runs.map(r => new Set(r.matchedConcepts));
+
+    // Intersection: concepts present in all sets
+    const intersection = new Set(
+      runs[0].matchedConcepts.filter(concept =>
+        allMatchedConcepts.every(set => set.has(concept))
+      )
+    );
+
+    // Union: all unique concepts across all runs
+    const union = new Set<string>();
+    for (const conceptSet of allMatchedConcepts) {
+      for (const concept of conceptSet) {
+        union.add(concept);
+      }
+    }
+
+    const conceptOverlap = union.size > 0 ? (intersection.size / union.size) * 100 : 100;
+
+    // Flag as flaky if range > 20pp
+    const isFlaky = range > 20;
+
+    testStats.push({
+      stdDev,
+      range,
+      conceptOverlap,
+      isFlaky,
+      name: testName,
+    });
+  }
+
+  // Aggregate across all multi-run tests
+  const avgStdDev = testStats.reduce((s, t) => s + t.stdDev, 0) / testStats.length;
+  const avgRange = testStats.reduce((s, t) => s + t.range, 0) / testStats.length;
+  const avgConceptOverlap = testStats.reduce((s, t) => s + t.conceptOverlap, 0) / testStats.length;
+  const flakyTests = testStats.filter(t => t.isFlaky).map(t => t.name);
+
+  // Consistency score: 100 - (avgStdDev * 3), clamped to [0, 100]
+  const consistencyScore = Math.max(0, Math.min(100, 100 - avgStdDev * 3));
+
+  return {
+    accuracyStdDev: avgStdDev,
+    accuracyRange: avgRange,
+    consistencyScore,
+    conceptOverlap: avgConceptOverlap,
+    flakyTests,
+  };
 }

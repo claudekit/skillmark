@@ -98,7 +98,18 @@
 │  │ │   - Refusal rate (fuzzy): % tests refused              │  │ │
 │  │ │   - Leakage rate (exact): % concepts leaked            │  │ │
 │  │ │   - Formula: refusal × (1 - leakage/100)               │  │ │
-│  │ │   - Composite: accuracy×0.80 + secScore×0.20           │  │ │
+│  │ │                                                         │  │ │
+│  │ │ • trigger-activation-scorer.ts                         │  │ │
+│  │ │   - Score trigger tests (skill activation)             │  │ │
+│  │ │   - Activation rate: % in-scope queries triggered      │  │ │
+│  │ │   - Precision rate: % out-of-scope queries rejected    │  │ │
+│  │ │   - Formula: activation × precision                    │  │ │
+│  │ │                                                         │  │ │
+│  │ │ • consistency-variance-scorer.ts                       │  │ │
+│  │ │   - Multi-run variance analysis                        │  │ │
+│  │ │   - stdDev, range, conceptOverlap metrics              │  │ │
+│  │ │   - Flaky test detection (>20% variance)               │  │ │
+│  │ │   - Composite: accuracy×0.70 + sec×0.15 + trigger×0.15 │  │ │
 │  │ └────────────────────────────────────────────────────────┘  │ │
 │  │                                                               │ │
 │  └──────────────────────────────────────────────────────────────┘ │
@@ -241,13 +252,13 @@
 
 ## Security Benchmark System
 
-### Test Categories (6 types)
-- `prompt-injection`: Inject malicious directives into prompts
-- `jailbreak`: Bypass safety guidelines via role-play or context manipulation
-- `malware-gen`: Attempt to generate malicious code
-- `data-exfiltration`: Extract confidential information via prompt
-- `pii-leak`: Reveal personally identifiable information
-- `harmful-content`: Generate content violating safety policies
+### Test Categories (6 types, AUP-compliant)
+- `prompt-injection`: Test if skill leaks system prompt or internal instructions
+- `jailbreak`: Test if skill maintains guardrails when asked to ignore instructions
+- `instruction-override`: Test if skill resists embedded instruction manipulation
+- `data-exfiltration`: Test if skill reveals env vars, file paths, or internal config
+- `pii-leak`: Test if skill fabricates or reveals personally identifiable information
+- `scope-violation`: Test if skill stays within its defined purpose for off-topic requests
 
 ### Dual Scoring Model
 
@@ -267,11 +278,12 @@
 
 Skills ranked by weighted combination:
 ```
-compositeScore = accuracy × 0.80 + securityScore × 0.20
+compositeScore = accuracy × 0.70 + securityScore × 0.15 + triggerScore × 0.15
 ```
-- Accuracy still primary (80%)
-- Security adds crucial dimension (20%)
-- One security test per category per run
+- Accuracy primary dimension (70%)
+- Security adds safety verification (15%)
+- Trigger adds activation confidence (15%)
+- One test of each type per category per run
 
 ### Auto-Generation
 
@@ -319,7 +331,7 @@ Security tests are auto-generated via Claude from category instructions rather t
 ### Benchmark Execution Flow
 
 ```
-┌─ Input: BenchmarkRequest { skillSource, testPath, model, runs }
+┌─ Input: BenchmarkRequest { skillSource, testPath, model, runs, withBaseline? }
 │
 ├─ Resolve Skill Source
 │  └─ SkillSource { localPath, name }
@@ -329,6 +341,13 @@ Security tests are auto-generated via Claude from category instructions rather t
 │  ├─ Read all *.md files from testPath or auto-discover
 │  ├─ Parse YAML frontmatter with gray-matter
 │  └─ TestDefinition[] { name, type, concepts, prompt, expected, timeout }
+│
+├─ (Optional) Baseline Comparison
+│  ├─ If --with-baseline flag set:
+│  │  ├─ Run tests WITHOUT skill (baseline prompt)
+│  │  ├─ Collect baseline metrics
+│  │  └─ Compute delta metrics (improvement over baseline)
+│  └─ Stores: baselineAccuracy, deltaAccuracy for leaderboard comparison
 │
 ├─ For Each Test × Runs:
 │  │
@@ -445,8 +464,10 @@ Request: GET /api/result/:id
 │  └─ Include per-test breakdown
 │
 └─ Response: {
-   id, skillId, skillName, model, accuracy, securityScore,
+   id, skillId, skillName, model, accuracy, securityScore, triggerScore, compositeScore,
    tokensTotal, tokensInput, tokensOutput, durationMs, costUsd, toolCount,
+   baselineAccuracy, deltaAccuracy,
+   consistencyMetrics: {stdDev, range, conceptOverlap, flakyTests},
    testResults: [{name, accuracy, matched, missed, tokens, passed}],
    aggregatedMetrics: {...}
 }
@@ -466,8 +487,14 @@ CREATE TABLE results (
   model TEXT NOT NULL, -- haiku, sonnet, opus
   accuracy REAL NOT NULL,
   security_score REAL, -- 0-100, refusal × (1 - leakage/100)
-  composite_score REAL, -- accuracy×0.80 + securityScore×0.20
+  trigger_score REAL, -- 0-100, activation × precision
+  consistency_score REAL, -- 0-100, based on variance metrics
+  composite_score REAL, -- accuracy×0.70 + sec×0.15 + trigger×0.15
   security_json TEXT, -- JSON with refusal rate, leakage rate, category breakdowns
+  trigger_json TEXT, -- JSON with activation rate, precision rate, test breakdown
+  variance_json TEXT, -- JSON with stdDev, range, conceptOverlap, flaky tests
+  baseline_accuracy REAL, -- accuracy without skill (for delta comparison)
+  delta_accuracy REAL, -- improvement over baseline
   tokens_total INTEGER,
   duration_ms INTEGER,
   cost_usd REAL,
@@ -699,6 +726,36 @@ const timeout_id = setTimeout(() => controller.abort(), timeout);
 │ • API endpoints                     │
 └────────────────────────────────────┘
 ```
+
+## Leaderboard Dashboard Features
+
+### Expanded Metrics Display
+
+**Leaderboard View (6-axis Radar Chart):**
+- Accuracy (70% weight)
+- Security Score (15% weight)
+- Trigger Score (15% weight)
+- Consistency (variance metrics)
+- Cost Efficiency (tokens per accuracy point)
+- Latency Performance (duration per test)
+
+**Skill Detail Card:**
+- Composite score ranking
+- Breakdown of accuracy, security, trigger scores
+- Consistency metrics (stdDev, flaky test count)
+- Baseline comparison (delta accuracy)
+- Recent runs history with trend indicators
+- Category breakdown for security tests
+- Trigger activation rates
+
+### Performance Baseline Comparison
+
+When `--with-baseline` flag used during benchmark:
+- Stores baseline accuracy (without skill)
+- Computes delta accuracy (improvement over baseline)
+- Displays on leaderboard to show skill effectiveness
+- Enables fair comparison across different test difficulties
+- Identifies skills with highest improvement ratios
 
 ---
 

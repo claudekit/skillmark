@@ -18,6 +18,7 @@ import {
   type SkillAnalysis,
 } from './skill-creator-invoker.js';
 import { buildEnhancedTestPrompt } from './enhanced-test-prompt-builder.js';
+import { validateGeneratedTest } from './aup-compliance-validator.js';
 
 /** Default values for test definitions */
 const DEFAULTS = {
@@ -29,14 +30,16 @@ const DEFAULTS = {
 /** Generated test from Claude CLI JSON output */
 interface GeneratedTest {
   name: string;
-  test_type: 'knowledge' | 'task' | 'security';
+  test_type: 'knowledge' | 'task' | 'security' | 'trigger';
   concepts: string[];
   timeout: number;
-  prompt: string;
-  expected_items: string[];
+  prompt?: string;
+  expected_items?: string[];
   category?: import('../types/index.js').SecurityCategory;
   severity?: import('../types/index.js').SecuritySeverity;
   forbidden_patterns?: string[];
+  positive_triggers?: string[];
+  negative_triggers?: string[];
 }
 
 /** Claude CLI JSON response structure */
@@ -70,9 +73,10 @@ export function parseTestContent(content: string, sourcePath: string = 'unknown'
   // Parse sections from body
   const sections = parseSections(body);
 
-  // Extract prompt
+  // Extract prompt (trigger tests use Positive/Negative Triggers instead)
   const prompt = sections.prompt || sections.question || '';
-  if (!prompt) {
+  const isTriggerType = frontmatter.type === 'trigger';
+  if (!prompt && !isTriggerType) {
     throw new Error(`Test file missing 'Prompt' or 'Question' section: ${sourcePath}`);
   }
 
@@ -93,23 +97,46 @@ export function parseTestContent(content: string, sourcePath: string = 'unknown'
     expected.push(...refusalPatterns);
   }
 
+  // Extract trigger-specific sections
+  const positiveTriggerSection = sections['positive triggers'] || '';
+  const positiveTriggers = positiveTriggerSection
+    ? parseListItems(positiveTriggerSection)
+    : undefined;
+
+  const negativeTriggerSection = sections['negative triggers'] || '';
+  const negativeTriggers = negativeTriggerSection
+    ? parseListItems(negativeTriggerSection)
+    : undefined;
+
   // Combine frontmatter concepts with expected patterns
   const concepts = [
     ...(frontmatter.concepts || []),
     ...extractConceptsFromExpected(expected),
   ];
 
+  // Set defaults for trigger tests
+  const isTriggerTest = frontmatter.type === 'trigger';
+  const timeout = isTriggerTest && !frontmatter.timeout
+    ? 30 // Short timeout for trigger tests
+    : (frontmatter.timeout || DEFAULTS.timeout);
+
+  const finalConcepts = isTriggerTest && concepts.length === 0
+    ? ['activates-on-relevant', 'ignores-irrelevant']
+    : [...new Set(concepts)]; // Deduplicate
+
   return {
     name: frontmatter.name,
     type: frontmatter.type || DEFAULTS.type,
-    concepts: [...new Set(concepts)], // Deduplicate
-    timeout: frontmatter.timeout || DEFAULTS.timeout,
+    concepts: finalConcepts,
+    timeout,
     prompt: prompt.trim(),
     expected,
     sourcePath,
     ...(frontmatter.category && { category: frontmatter.category }),
     ...(frontmatter.severity && { severity: frontmatter.severity }),
     ...(forbiddenPatterns?.length && { forbiddenPatterns }),
+    ...(positiveTriggers?.length && { positiveTriggers }),
+    ...(negativeTriggers?.length && { negativeTriggers }),
   };
 }
 
@@ -175,6 +202,52 @@ function parseExpectedPatterns(content: string): string[] {
   }
 
   return patterns;
+}
+
+/**
+ * Parse list items from section content (for trigger queries)
+ * Strips quotes, bullets, and numbering
+ */
+function parseListItems(content: string): string[] {
+  const items: string[] = [];
+  const lines = content.split('\n');
+
+  for (const line of lines) {
+    // Parse checkbox items: - [ ] Item or - [x] Item
+    const checkboxMatch = line.match(/^-\s*\[[\sx]\]\s*(.+)$/);
+    if (checkboxMatch) {
+      items.push(stripQuotes(checkboxMatch[1].trim()));
+      continue;
+    }
+
+    // Parse bullet items: - Item or * Item
+    const bulletMatch = line.match(/^[-*]\s+(.+)$/);
+    if (bulletMatch) {
+      items.push(stripQuotes(bulletMatch[1].trim()));
+      continue;
+    }
+
+    // Parse numbered items: 1. Item
+    const numberedMatch = line.match(/^\d+\.\s+(.+)$/);
+    if (numberedMatch) {
+      items.push(stripQuotes(numberedMatch[1].trim()));
+      continue;
+    }
+
+    // Parse plain lines (non-empty)
+    if (line.trim()) {
+      items.push(stripQuotes(line.trim()));
+    }
+  }
+
+  return items;
+}
+
+/**
+ * Strip surrounding quotes from a string
+ */
+function stripQuotes(text: string): string {
+  return text.replace(/^["']|["']$/g, '');
 }
 
 /**
@@ -479,24 +552,47 @@ function formatTestToMarkdown(test: GeneratedTest): string {
   }
   lines.push('---');
   lines.push('');
-  lines.push('# Prompt');
-  lines.push('');
-  lines.push(test.prompt);
-  lines.push('');
-  lines.push('# Expected');
-  lines.push('');
-  lines.push('The response should cover:');
 
-  for (const item of test.expected_items) {
-    lines.push(`- [ ] ${item}`);
-  }
+  // Handle trigger tests differently
+  if (test.test_type === 'trigger') {
+    if (test.positive_triggers?.length) {
+      lines.push('# Positive Triggers');
+      lines.push('');
+      for (const trigger of test.positive_triggers) {
+        lines.push(`- ${trigger}`);
+      }
+      lines.push('');
+    }
 
-  if (test.forbidden_patterns?.length) {
+    if (test.negative_triggers?.length) {
+      lines.push('# Negative Triggers');
+      lines.push('');
+      for (const trigger of test.negative_triggers) {
+        lines.push(`- ${trigger}`);
+      }
+      lines.push('');
+    }
+  } else {
+    // Regular test format
+    lines.push('# Prompt');
     lines.push('');
-    lines.push('# Forbidden Patterns');
+    lines.push(test.prompt || '');
     lines.push('');
-    for (const pattern of test.forbidden_patterns) {
-      lines.push(`- ${pattern}`);
+    lines.push('# Expected');
+    lines.push('');
+    lines.push('The response should cover:');
+
+    for (const item of test.expected_items || []) {
+      lines.push(`- [ ] ${item}`);
+    }
+
+    if (test.forbidden_patterns?.length) {
+      lines.push('');
+      lines.push('# Forbidden Patterns');
+      lines.push('');
+      for (const pattern of test.forbidden_patterns) {
+        lines.push(`- ${pattern}`);
+      }
     }
   }
 
@@ -514,12 +610,14 @@ function convertToTestDefinition(test: GeneratedTest, testsDir: string): TestDef
     type: test.test_type,
     concepts: test.concepts,
     timeout: test.timeout,
-    prompt: test.prompt,
-    expected: test.expected_items,
+    prompt: test.prompt || '',
+    expected: test.expected_items || [],
     sourcePath: join(testsDir, filename),
     ...(test.category && { category: test.category }),
     ...(test.severity && { severity: test.severity }),
     ...(test.forbidden_patterns?.length && { forbiddenPatterns: test.forbidden_patterns }),
+    ...(test.positive_triggers?.length && { positiveTriggers: test.positive_triggers }),
+    ...(test.negative_triggers?.length && { negativeTriggers: test.negative_triggers }),
   };
 }
 
@@ -611,6 +709,39 @@ export async function generateTestsFromSkillMd(
 
   console.log(`Generated ${generatedTests.length} tests`);
 
+  // AUP compliance validation — reject tests with prohibited content
+  const compliantTests: GeneratedTest[] = [];
+  for (const test of generatedTests) {
+    // Skip AUP validation for trigger tests (no prompt to validate)
+    if (test.test_type === 'trigger') {
+      compliantTests.push(test);
+      continue;
+    }
+
+    // Validate non-trigger tests
+    const validation = validateGeneratedTest({
+      prompt: test.prompt || '',
+      test_type: test.test_type,
+      category: test.category,
+      expected_items: test.expected_items,
+      forbidden_patterns: test.forbidden_patterns,
+    });
+    if (validation.valid) {
+      compliantTests.push(test);
+    } else {
+      console.warn(`Skipping AUP-violating test "${test.name}": ${validation.violations[0]}`);
+    }
+  }
+
+  if (compliantTests.length < generatedTests.length) {
+    console.log(`AUP filter: ${compliantTests.length}/${generatedTests.length} tests passed compliance check`);
+  }
+
+  if (compliantTests.length === 0) {
+    console.warn('All generated tests failed AUP compliance — falling back');
+    return generateFallbackTests(skillPath);
+  }
+
   // Create tests directory
   await mkdir(testsDir, { recursive: true });
 
@@ -618,7 +749,7 @@ export async function generateTestsFromSkillMd(
   const tests: TestDefinition[] = [];
   let written = 0;
 
-  for (const test of generatedTests) {
+  for (const test of compliantTests) {
     const filename = `${test.name}-test.md`;
     const filepath = join(testsDir, filename);
 

@@ -7,6 +7,7 @@ import {
   scoreResponse,
   aggregateMetrics,
   calculatePassRate,
+  computeConsistencyMetrics,
 } from './concept-accuracy-scorer.js';
 import type { TestDefinition, TestResult, BenchmarkMetrics } from '../types/index.js';
 
@@ -277,5 +278,285 @@ describe('calculatePassRate', () => {
     ];
 
     expect(calculatePassRate(results)).toBe(0);
+  });
+});
+
+describe('computeConsistencyMetrics', () => {
+  it('returns null for single-run results', () => {
+    const results: TestResult[] = [
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 80 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      {
+        test: createTestDefinition({ name: 'test-2' }),
+        metrics: createMetrics({ accuracy: 70 }),
+        matchedConcepts: ['consensus'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+    ];
+
+    const consistency = computeConsistencyMetrics(results);
+
+    expect(consistency).toBeNull();
+  });
+
+  it('computes stdDev and range across runs', () => {
+    const results: TestResult[] = [
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 80 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 90 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 70 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+    ];
+
+    const consistency = computeConsistencyMetrics(results);
+
+    expect(consistency).not.toBeNull();
+    expect(consistency!.accuracyRange).toBe(20); // 90 - 70
+    // StdDev calculation: avg = 80, variance = ((80-80)^2 + (90-80)^2 + (70-80)^2) / 3 = 200/3 = 66.67, stdDev = sqrt(66.67) ≈ 8.16
+    expect(consistency!.accuracyStdDev).toBeCloseTo(8.16, 1);
+  });
+
+  it('flags flaky tests with >20pp range', () => {
+    const results: TestResult[] = [
+      {
+        test: createTestDefinition({ name: 'stable-test' }),
+        metrics: createMetrics({ accuracy: 80 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      {
+        test: createTestDefinition({ name: 'stable-test' }),
+        metrics: createMetrics({ accuracy: 85 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      {
+        test: createTestDefinition({ name: 'flaky-test' }),
+        metrics: createMetrics({ accuracy: 50 }),
+        matchedConcepts: ['consensus'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: false,
+      },
+      {
+        test: createTestDefinition({ name: 'flaky-test' }),
+        metrics: createMetrics({ accuracy: 90 }),
+        matchedConcepts: ['consensus'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+    ];
+
+    const consistency = computeConsistencyMetrics(results);
+
+    expect(consistency).not.toBeNull();
+    expect(consistency!.flakyTests).toContain('flaky-test');
+    expect(consistency!.flakyTests).not.toContain('stable-test');
+  });
+
+  it('computes concept overlap percentage', () => {
+    const results: TestResult[] = [
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 80 }),
+        matchedConcepts: ['orchestrator', 'consensus'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 85 }),
+        matchedConcepts: ['orchestrator', 'consensus', 'context isolation'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 75 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+    ];
+
+    const consistency = computeConsistencyMetrics(results);
+
+    expect(consistency).not.toBeNull();
+    // Intersection: 'orchestrator' (present in all 3)
+    // Union: 'orchestrator', 'consensus', 'context isolation' (3 total)
+    // Overlap: 1/3 = 33.33%
+    expect(consistency!.conceptOverlap).toBeCloseTo(33.33, 1);
+  });
+
+  it('returns consistencyScore clamped to [0, 100]', () => {
+    // Test with low stdDev (high consistency)
+    const stableResults: TestResult[] = [
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 80 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 82 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+    ];
+
+    const stableConsistency = computeConsistencyMetrics(stableResults);
+    expect(stableConsistency).not.toBeNull();
+    expect(stableConsistency!.consistencyScore).toBeGreaterThanOrEqual(0);
+    expect(stableConsistency!.consistencyScore).toBeLessThanOrEqual(100);
+    expect(stableConsistency!.consistencyScore).toBeGreaterThan(90); // Should be high
+
+    // Test with high stdDev (low consistency) - should clamp to 0
+    const unstableResults: TestResult[] = [
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 10 }),
+        matchedConcepts: [],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: false,
+      },
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 90 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+    ];
+
+    const unstableConsistency = computeConsistencyMetrics(unstableResults);
+    expect(unstableConsistency).not.toBeNull();
+    expect(unstableConsistency!.consistencyScore).toBeGreaterThanOrEqual(0);
+    expect(unstableConsistency!.consistencyScore).toBeLessThanOrEqual(100);
+  });
+
+  it('handles multiple tests with different run counts', () => {
+    const results: TestResult[] = [
+      // Test 1: 3 runs
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 80 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 85 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      {
+        test: createTestDefinition({ name: 'test-1' }),
+        metrics: createMetrics({ accuracy: 75 }),
+        matchedConcepts: ['orchestrator'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      // Test 2: 1 run (should be ignored)
+      {
+        test: createTestDefinition({ name: 'test-2' }),
+        metrics: createMetrics({ accuracy: 90 }),
+        matchedConcepts: ['consensus'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+      // Test 3: 2 runs
+      {
+        test: createTestDefinition({ name: 'test-3' }),
+        metrics: createMetrics({ accuracy: 60 }),
+        matchedConcepts: ['context isolation'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: false,
+      },
+      {
+        test: createTestDefinition({ name: 'test-3' }),
+        metrics: createMetrics({ accuracy: 70 }),
+        matchedConcepts: ['context isolation'],
+        missedConcepts: [],
+        response: '',
+        timestamp: new Date().toISOString(),
+        passed: true,
+      },
+    ];
+
+    const consistency = computeConsistencyMetrics(results);
+
+    expect(consistency).not.toBeNull();
+    // Should compute metrics only from test-1 (3 runs) and test-3 (2 runs)
+    // test-2 with 1 run should be ignored
   });
 });

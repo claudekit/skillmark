@@ -2,14 +2,20 @@
  * Core types for Skillmark benchmark system
  */
 
-/** Security test categories */
+/**
+ * Security test categories — AUP-compliant.
+ *
+ * Tests Claude skill boundary enforcement without requesting
+ * generation of prohibited content (weapons, malware, CSAM, etc.).
+ * See: https://www.anthropic.com/legal/aup
+ */
 export type SecurityCategory =
   | 'prompt-injection'
   | 'jailbreak'
-  | 'malware-gen'
+  | 'instruction-override'
   | 'data-exfiltration'
   | 'pii-leak'
-  | 'harmful-content';
+  | 'scope-violation';
 
 /** Severity levels for security tests */
 export type SecuritySeverity = 'critical' | 'high' | 'medium';
@@ -30,12 +36,44 @@ export interface SecurityScore {
   }>>;
 }
 
+/** Consistency metrics from multi-run variance analysis */
+export interface ConsistencyMetrics {
+  /** Standard deviation of accuracy across runs */
+  accuracyStdDev: number;
+  /** Max accuracy - min accuracy across runs */
+  accuracyRange: number;
+  /** Consistency score: 100 - (stdDev * 3), clamped to [0, 100] */
+  consistencyScore: number;
+  /** % concepts matched in ALL runs vs ANY run */
+  conceptOverlap: number;
+  /** Test names with accuracy range > 20pp */
+  flakyTests: string[];
+}
+
+/** Trigger activation score from positive/negative query testing */
+export interface TriggerScore {
+  /** % of positive queries that activated the skill (0-100) */
+  triggerRate: number;
+  /** % of negative queries that incorrectly activated (0-100) */
+  falsePositiveRate: number;
+  /** Combined: triggerRate × (1 - falsePositiveRate / 100) */
+  triggerScore: number;
+  /** Per-query results */
+  queryResults: Array<{
+    query: string;
+    expected: 'activate' | 'ignore';
+    actual: 'activated' | 'ignored';
+    correct: boolean;
+    toolCount: number;
+  }>;
+}
+
 /** Test definition parsed from markdown frontmatter */
 export interface TestDefinition {
   /** Unique test identifier */
   name: string;
-  /** Type of test: knowledge (Q&A), task (execution), or security (adversarial) */
-  type: 'knowledge' | 'task' | 'security';
+  /** Type of test: knowledge (Q&A), task (execution), security (adversarial), or trigger (activation) */
+  type: 'knowledge' | 'task' | 'security' | 'trigger';
   /** Concepts to check in response */
   concepts: string[];
   /** Timeout in seconds */
@@ -52,6 +90,10 @@ export interface TestDefinition {
   severity?: SecuritySeverity;
   /** Patterns that must NOT appear in response (only for type: 'security') */
   forbiddenPatterns?: string[];
+  /** Queries that SHOULD activate the skill (only for type: 'trigger') */
+  positiveTriggers?: string[];
+  /** Queries that should NOT activate the skill (only for type: 'trigger') */
+  negativeTriggers?: string[];
 }
 
 /** Metrics collected from a single benchmark run */
@@ -116,6 +158,12 @@ export interface BenchmarkResult {
   securityScore?: SecurityScore;
   /** Git repository URL (auto-detected from skill directory) */
   repoUrl?: string;
+  /** Consistency metrics (null if single run) */
+  consistency?: ConsistencyMetrics;
+  /** Trigger activation score (null if no trigger tests run) */
+  triggerScore?: TriggerScore;
+  /** Baseline comparison (null if --with-baseline not used) */
+  baseline?: BaselineComparison;
 }
 
 /** Skill source types */
@@ -131,6 +179,36 @@ export interface SkillSource {
   localPath: string;
   /** Skill name extracted from source */
   name: string;
+}
+
+/** Delta between with-skill and without-skill metrics */
+export interface BaselineDelta {
+  /** Accuracy change in percentage points (positive = skill helped) */
+  accuracyDelta: number;
+  /** Token reduction percentage (positive = fewer tokens with skill) */
+  tokenReduction: number;
+  /** Tool count difference (positive = fewer tools with skill) */
+  toolCountDelta: number;
+  /** Cost savings in USD (positive = cheaper with skill) */
+  costDelta: number;
+  /** Duration change in ms (positive = faster with skill) */
+  durationDelta: number;
+}
+
+/** Baseline comparison for a single test */
+export interface BaselineTestComparison {
+  testName: string;
+  withSkill: BenchmarkMetrics;
+  withoutSkill: BenchmarkMetrics;
+  delta: BaselineDelta;
+}
+
+/** Aggregated baseline comparison */
+export interface BaselineComparison {
+  /** Per-test comparisons */
+  tests: BaselineTestComparison[];
+  /** Averaged deltas across all tested items */
+  aggregatedDelta: BaselineDelta;
 }
 
 /** CLI run command options */
@@ -153,6 +231,8 @@ export interface RunOptions {
   generateModel?: 'haiku' | 'sonnet' | 'opus';
   /** Run tests in parallel (concurrent Claude CLI processes) */
   parallel?: boolean;
+  /** Run baseline comparison (same tests without skill) */
+  withBaseline?: boolean;
 }
 
 /** CLI generate-tests command options */

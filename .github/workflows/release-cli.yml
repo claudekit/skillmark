@@ -14,6 +14,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -31,12 +33,69 @@ jobs:
       - name: Build CLI
         run: pnpm --filter @skillmark/cli build
 
+      - name: Auto-generate changeset from commits
+        if: "!startsWith(github.event.head_commit.message, 'chore: version packages')"
+        run: |
+          # Skip if changesets already exist
+          if ls .changeset/*.md 2>/dev/null | grep -v README.md | grep -q .; then
+            echo "Changesets already exist, skipping auto-generation"
+            exit 0
+          fi
+
+          # Find last release tag for @skillmark/cli
+          LAST_TAG=$(git tag --list '@skillmark/cli@*' --sort=-v:refname | head -1)
+          if [ -z "$LAST_TAG" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${LAST_TAG}..HEAD"
+          fi
+
+          # Collect commit messages since last release
+          COMMITS=$(git log --pretty=format:"%s" $RANGE -- packages/ 2>/dev/null || git log --pretty=format:"%s" -20 -- packages/)
+
+          if [ -z "$COMMITS" ]; then
+            echo "No package commits found, skipping"
+            exit 0
+          fi
+
+          # Determine bump type from conventional commits
+          BUMP="patch"
+          if echo "$COMMITS" | grep -qiE "^feat(\(.*\))?!:|BREAKING CHANGE"; then
+            BUMP="major"
+          elif echo "$COMMITS" | grep -qiE "^feat(\(.*\))?:"; then
+            BUMP="minor"
+          fi
+
+          # Build summary from commit messages
+          SUMMARY=$(echo "$COMMITS" | grep -iE "^(feat|fix|perf|refactor)" | head -10 | sed 's/^/- /')
+          if [ -z "$SUMMARY" ]; then
+            SUMMARY="- Maintenance updates"
+          fi
+
+          # Generate changeset file
+          FILENAME=".changeset/auto-release-$(date +%s).md"
+          cat > "$FILENAME" << EOF
+          ---
+          "@skillmark/cli": $BUMP
+          ---
+
+          Auto-release from conventional commits
+
+          $SUMMARY
+          EOF
+
+          # Fix indentation (heredoc adds leading spaces)
+          sed -i 's/^          //' "$FILENAME"
+
+          echo "Generated changeset ($BUMP bump):"
+          cat "$FILENAME"
+
       - name: Create Release Pull Request or Publish
         id: changesets
         uses: changesets/action@v1
         with:
           publish: pnpm release
-          version: pnpm version
+          version: pnpm run version
           title: 'chore: version packages'
           commit: 'chore: version packages'
         env:

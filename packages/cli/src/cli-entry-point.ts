@@ -11,6 +11,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { runBenchmark } from './commands/run-benchmark-command.js';
 import { publishResults, publishResultsWithAutoKey } from './commands/publish-results-command.js';
+import { generateMarkdownReport } from './engine/benchmark-report-generator.js';
 import { viewLeaderboard } from './commands/view-leaderboard-command.js';
 import { readApiKeyConfig, getConfigSourceDescription } from './config/api-key-config-reader.js';
 import { runAuth, showAuthStatus } from './commands/auth-setup-and-token-storage-command.js';
@@ -43,6 +44,7 @@ program
   .option('-c, --prompt-context <text>', 'Additional prompt context for test auto-generation')
   .option('--generate-model <model>', 'Model for test generation (haiku|sonnet|opus)', 'opus')
   .option('--parallel', 'Run tests in parallel (concurrent Claude CLI processes)')
+  .option('--with-baseline', 'Run baseline comparison (tests without skill for comparison)')
   .action(async (skillSource: string, options) => {
     try {
       // Validate model
@@ -78,6 +80,7 @@ program
         promptContext: options.promptContext,
         generateModel: genModel as 'haiku' | 'sonnet' | 'opus',
         parallel: options.parallel,
+        withBaseline: options.withBaseline ?? false,
       });
 
       // Auto-publish unless --no-publish is passed
@@ -107,6 +110,7 @@ program
             apiKey,
             endpoint: options.endpoint,
             testsPath: options.tests,
+            reportMarkdown: generateMarkdownReport(result),
           });
         }
       }

@@ -1,6 +1,6 @@
 {
   "name": "@skillmark/webapp",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Skillmark leaderboard webapp (Cloudflare Workers)",
   "type": "module",
   "main": "./src/worker-entry-point.ts",
