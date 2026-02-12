@@ -1646,6 +1646,12 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
     .radar-container svg { max-width: 350px; width: 100%; }
     .radar-label { font-family: 'Geist', -apple-system, sans-serif; font-size: 11px; fill: #888; }
     .radar-value { font-family: 'Geist Mono', monospace; font-size: 10px; fill: #ededed; }
+    .embed-snippet { max-width: 600px; margin: 1.5rem auto 0; }
+    .embed-label { font-size: 0.75rem; color: #888; display: block; margin-bottom: 0.4rem; }
+    .embed-code-row { display: flex; gap: 0.5rem; align-items: stretch; }
+    .embed-code { flex: 1; background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 0.5rem 0.75rem; font-size: 0.7rem; color: #c9d1d9; overflow-x: auto; white-space: nowrap; display: flex; align-items: center; }
+    .embed-copy-btn { background: #21262d; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; padding: 0.5rem 1rem; cursor: pointer; font-size: 0.75rem; white-space: nowrap; }
+    .embed-copy-btn:hover { background: #30363d; }
     .result-row { cursor: pointer; transition: background 0.15s; }
     .result-row:hover td { background: #111; }
     .result-row .result-date::before { content: ''; display: inline-block; width: 0; height: 0; border-left: 4px solid var(--text-secondary); border-top: 3px solid transparent; border-bottom: 3px solid transparent; margin-right: 0.5rem; transition: transform 0.2s; }
@@ -1776,6 +1782,13 @@ function renderSkillDetailPage(skill: LeaderboardRow, results: SkillResultRow[])
       <h2>Performance Profile</h2>
       <div class="radar-container">
         ${radarSvg}
+      </div>
+      <div class="embed-snippet">
+        <label class="embed-label">Embed this chart</label>
+        <div class="embed-code-row">
+          <code class="embed-code" id="embed-code">&lt;script src="https://skillmark.sh/embed.js" data-skill="${escapeHtml(skill.skillName)}" data-theme="dark"&gt;&lt;/script&gt;</code>
+          <button class="embed-copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('embed-code').textContent).then(function(){var b=event.target;b.textContent='Copied!';setTimeout(function(){b.textContent='Copy'},1500)})">Copy</button>
+        </div>
       </div>
     </section>
 

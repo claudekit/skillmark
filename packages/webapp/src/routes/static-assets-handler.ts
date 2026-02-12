@@ -22,6 +22,16 @@ assetsRouter.get('/favicon.ico', (c) => {
   });
 });
 
+/** Embeddable radar chart widget - self-contained JS for external sites */
+assetsRouter.get('/embed.js', (c) => {
+  return new Response(EMBED_WIDGET_JS, {
+    headers: {
+      'Content-Type': 'application/javascript; charset=utf-8',
+      'Cache-Control': 'public, max-age=604800',
+    },
+  });
+});
+
 assetsRouter.get('/favicon.png', (c) => {
   const buffer = Uint8Array.from(atob(FAVICON_BASE64), c => c.charCodeAt(0));
   return new Response(buffer, {
@@ -31,6 +41,59 @@ assetsRouter.get('/favicon.png', (c) => {
     },
   });
 });
+
+/**
+ * Embed widget JS — self-contained radar chart renderer for external sites.
+ * Usage: <script src="https://skillmark.sh/embed.js" data-skill="name" data-theme="dark"></script>
+ */
+const EMBED_WIDGET_JS = `(function(){
+"use strict";
+var API="https://skillmark.sh/api";
+function clamp(v){return Math.max(0,Math.min(100,v))}
+function metrics(d){
+  var dr=d.history.filter(function(r){return r.durationMs>0});
+  var ad=dr.length?dr.reduce(function(s,r){return s+r.durationMs},0)/dr.length:0;
+  return{accuracy:clamp(d.bestAccuracy),security:clamp(d.bestSecurity||0),trigger:clamp(d.bestTrigger||0),
+    tokenEfficiency:clamp(100-(d.avgTokens/10000)*100),costEfficiency:clamp(100-(d.avgCost/0.10)*100),
+    speed:clamp(100-(ad/60000)*100)};
+}
+function svg(m,t){
+  var cx=180,cy=160,R=110,labels=["Accuracy","Security","Trigger","Tokens","Cost","Speed"];
+  var vals=[m.accuracy,m.security,m.trigger,m.tokenEfficiency,m.costEfficiency,m.speed];
+  var angles=labels.map(function(_,i){return(-90+i*60)*Math.PI/180});
+  function pt(a,r){return(cx+r*Math.cos(a)).toFixed(1)+","+(cy+r*Math.sin(a)).toFixed(1)}
+  function poly(r){return angles.map(function(a){return pt(a,r)}).join(" ")}
+  var dk=t==="dark",gc=dk?"#333":"#ccc",fc=dk?"rgba(88,166,255,0.15)":"rgba(37,99,235,0.12)";
+  var sc=dk?"#58a6ff":"#2563eb",lc=dk?"#888":"#666",vc=dk?"#ededed":"#111",bg=dk?"#0d1117":"#fff",bc=dk?"#484f58":"#aaa";
+  var g=[0.25,0.5,0.75,1].map(function(p){return'<polygon points="'+poly(R*p)+'" fill="none" stroke="'+gc+'" stroke-width="0.5"/>'}).join("");
+  var ax=angles.map(function(a){var p=pt(a,R).split(",");return'<line x1="'+cx+'" y1="'+cy+'" x2="'+p[0]+'" y2="'+p[1]+'" stroke="'+gc+'" stroke-width="0.5"/>'}).join("");
+  var dp=vals.map(function(v,i){return pt(angles[i],(v/100)*R)});
+  var d='<polygon points="'+dp.join(" ")+'" fill="'+fc+'" stroke="'+sc+'" stroke-width="1.5"/>';
+  var dots=dp.map(function(p){var c=p.split(",");return'<circle cx="'+c[0]+'" cy="'+c[1]+'" r="3" fill="'+sc+'"/>'}).join("");
+  var lb=labels.map(function(l,i){var a=angles[i],lx=cx+(R+24)*Math.cos(a),ly=cy+(R+24)*Math.sin(a);
+    var an=Math.abs(lx-cx)<5?"middle":lx>cx?"start":"end";
+    return'<text x="'+lx.toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="'+an+'" dominant-baseline="middle" font-size="11" fill="'+lc+'" font-family="system-ui,sans-serif">'+l+'</text>'
+    +'<text x="'+lx.toFixed(1)+'" y="'+(ly+13).toFixed(1)+'" text-anchor="'+an+'" dominant-baseline="middle" font-size="10" fill="'+vc+'" font-family="monospace">'+vals[i].toFixed(0)+'</text>'}).join("");
+  return'<svg viewBox="0 0 360 340" xmlns="http://www.w3.org/2000/svg" style="background:'+bg+';border-radius:8px">'+g+ax+d+dots+lb
+    +'<text x="180" y="330" text-anchor="middle" font-size="9" fill="'+bc+'" font-family="system-ui,sans-serif">Powered by skillmark.sh</text></svg>';
+}
+function init(){
+  var scripts=document.querySelectorAll('script[data-skill][src*="embed"]');
+  for(var i=0;i<scripts.length;i++){(function(s){
+    var name=s.getAttribute("data-skill");if(!name)return;
+    var theme=s.getAttribute("data-theme")||"dark";
+    var width=s.getAttribute("data-width")||"350px";
+    var host=document.createElement("div");host.style.width=width;
+    s.parentNode.insertBefore(host,s.nextSibling);
+    var shadow=host.attachShadow({mode:"closed"});
+    shadow.innerHTML='<div style="width:100%;text-align:center;font-family:system-ui;color:'+(theme==="dark"?"#888":"#666")+';font-size:12px">Loading...</div>';
+    fetch(API+"/skill/"+encodeURIComponent(name)).then(function(r){if(!r.ok)throw r;return r.json()}).then(function(data){
+      shadow.innerHTML=svg(metrics(data),theme);
+    }).catch(function(){shadow.innerHTML='<div style="padding:1rem;text-align:center;font-family:system-ui;color:#f85149;font-size:12px">Failed to load skill data</div>'});
+  })(scripts[i])}
+}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",init);else init();
+})();`;
 
 // OG Image - embedded base64 (loaded at build time)
 // Note: For production, consider using Cloudflare R2 for large assets
