@@ -101,7 +101,7 @@ Phase 4: Scale & Polish  [░░░░░░░░░░░░░░] Planned
 - [x] System architecture
 - [x] Project roadmap
 - [ ] Deployment guide
-- [ ] API reference (swagger)
+- [x] API reference (`docs/api-reference.md`)
 
 ### Success Metrics (Phase 1)
 
@@ -262,7 +262,7 @@ Phase 4: Scale & Polish  [░░░░░░░░░░░░░░] Planned
 - [ ] Accessibility audit (WCAG 2.1)
 
 ### Documentation
-- [ ] API reference (OpenAPI/Swagger)
+- [x] API reference (`docs/api-reference.md`)
 - [ ] SDK libraries (JavaScript/Python)
 - [ ] Video tutorials
 - [ ] Blog posts & case studies
